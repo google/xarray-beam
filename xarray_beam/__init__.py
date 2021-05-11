@@ -27,3 +27,5 @@ from xarray_beam._src.zarr import (
     ChunksToZarr,
     DatasetToZarr,
 )
+
+__version__ = '0.0.1'

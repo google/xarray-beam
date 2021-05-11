@@ -25,8 +25,8 @@ INSTALL_REQUIRES = [
 ]
 
 setuptools.setup(
-    name='Xarray-Beam',
-    version='0.0.0',
+    name='xarray-beam',
+    version='0.0.1',
     license='Apache 2.0',
     author='Google LLC',
     author_email='noreply@google.com',
