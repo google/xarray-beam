@@ -81,11 +81,14 @@ def _round_chunk_key(
 ) -> core.ChunkKey:
   """Round down a chunk-key to offsets corresponding to new chunks."""
   new_offsets = {}
-  for dim, chunk_size in target_chunks.items():
-    if chunk_size == -1:
+  for dim, offset in chunk_key.items():
+    chunk_size = target_chunks.get(dim)
+    if chunk_size is None:
+      new_offsets[dim] = offset
+    elif chunk_size == -1:
       new_offsets[dim] = 0
     else:
-      new_offsets[dim] = chunk_size * (chunk_key[dim] // chunk_size)
+      new_offsets[dim] = chunk_size * (offset // chunk_size)
   return core.ChunkKey(new_offsets)
 
 

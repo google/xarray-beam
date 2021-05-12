@@ -14,8 +14,8 @@ multi-dimensional labeled arrays, such as:
 - Ingesting large multi-dimensional array datasets into an analysis-ready,
   cloud-optimized format, namely [Zarr](https://zarr.readthedocs.io/) (see also
   [Pangeo Forge](https://github.com/pangeo-forge/pangeo-forge-recipes))
-- Calculating statistics across distributed dimensions and with arbitrary
-  groupings (not yet implemented)
+- Calculating statistics (e.g., "climatology") across distributed datasets with
+  arbitrary groups.
 
 Xarray-Beam is implemented as a _thin layer_ on top of existing libraries for
 working with large-scale Xarray datasets. For example, it leverages

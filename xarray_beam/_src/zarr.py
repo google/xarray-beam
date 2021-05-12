@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """IO with Zarr via Xarray."""
+import logging
 from typing import List, Optional, Mapping, Union, MutableMapping
 
 import apache_beam as beam
@@ -21,6 +22,8 @@ import xarray
 from xarray_beam._src import core
 from xarray_beam._src import rechunk
 from xarray_beam._src import threadmap
+
+# pylint: disable=logging-format-interpolation
 
 
 class _DiscoverTemplate(beam.PTransform):
@@ -90,6 +93,7 @@ def _setup_zarr(template, store, zarr_chunks):
   for var in template2.variables.values():
     if 'chunks' in var.encoding:
       del var.encoding['chunks']
+  logging.info(f'writing Zarr metadata for template:\n{template}')
   template2.to_zarr(
       store, compute=False, consolidated=True, mode='w',
   )

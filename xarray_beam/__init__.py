@@ -18,6 +18,10 @@ from xarray_beam._src.core import (
     ChunkKey,
     DatasetToChunks,
 )
+from xarray_beam._src.combiners import (
+    Mean,
+    MeanCombineFn,
+)
 from xarray_beam._src.rechunk import (
     ConsolidateChunks,
     SplitChunks,

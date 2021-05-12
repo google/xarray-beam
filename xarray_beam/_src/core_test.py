@@ -55,6 +55,13 @@ class ChunkKeyTest(test_util.TestCase):
     slices = key.to_slices({'x': 5, 'y': 10, 'extra_key': 100})
     self.assertEqual(slices, expected)
 
+    expected = {'x': slice(None), 'y': slice(10, 20, 1)}
+    slices = key.to_slices({'y': 10})
+    self.assertEqual(slices, expected)
+
+    with self.assertRaisesRegex(ValueError, 'non-zero offset'):
+      key.to_slices({'x': 5})
+
   def test_operators(self):
     key = xarray_beam.ChunkKey({'x': 0, 'y': 10})
 
@@ -115,10 +122,19 @@ class DatasetToChunksTest(test_util.TestCase):
     ]
     self.assertEqual(actual, expected)
 
+  def test_iter_chunk_keys_with_base(self):
     actual = sorted(core.iter_chunk_keys({'x': (3, 3)}, base={'x': 30}))
     expected = [
         xarray_beam.ChunkKey({'x': 30}),
         xarray_beam.ChunkKey({'x': 33}),
+    ]
+    self.assertEqual(actual, expected)
+
+  def test_iter_chunk_keys_with_more_base_dims(self):
+    actual = sorted(core.iter_chunk_keys({'x': (3, 3)}, base={'x': 30, 'y': 0}))
+    expected = [
+        xarray_beam.ChunkKey({'x': 30, 'y': 0}),
+        xarray_beam.ChunkKey({'x': 33, 'y': 0}),
     ]
     self.assertEqual(actual, expected)
 
@@ -153,7 +169,7 @@ class DatasetToChunksTest(test_util.TestCase):
     expected = {'x': (3, 3, 3, 1)}
     self.assertEqual(actual, expected)
 
-  def test_dataset_to_chunks(self):
+  def test_dataset_to_chunks_multiple(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
     expected = [
         (xarray_beam.ChunkKey({'x': 0}), dataset.head(x=3)),
@@ -174,6 +190,21 @@ class DatasetToChunksTest(test_util.TestCase):
     actual = (
         test_util.EagerPipeline()
         | xarray_beam.DatasetToChunks(dataset, chunks={'x': 3})
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_dataset_to_chunks_whole(self):
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
+    expected = [(xarray_beam.ChunkKey({'x': 0}), dataset)]
+    actual = (
+        test_util.EagerPipeline()
+        | xarray_beam.DatasetToChunks(dataset, chunks={'x': -1})
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+    actual = (
+        test_util.EagerPipeline()
+        | xarray_beam.DatasetToChunks(dataset, chunks={})
     )
     self.assertIdenticalChunks(actual, expected)
 

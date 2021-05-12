@@ -85,10 +85,20 @@ class ChunkKey(Mapping[str, int]):
     """
     if base is None:
       base = {k: 0 for k in self._offsets}
-    return {
-        k: slice(v - base[k], v - base[k] + sizes[k], 1)
-        for k, v in self._offsets.items()
-    }
+    slices = {}
+    for k, v in self._offsets.items():
+      offset = v - base[k]
+      size = sizes.get(k)
+      if size is not None:
+        slices[k] = slice(offset, offset + size, 1)
+      else:
+        if offset != 0:
+          raise ValueError(
+              f'dimension {k} has a non-zero offset {offset} but does not '
+              f'appear in the dict of known sizes: {sizes}'
+          )
+        slices[k] = slice(None)
+    return slices
 
   def __or__(self, new_offsets: Mapping[str, int]) -> 'ChunkKey':
     return type(self)({**self._offsets, **new_offsets})
@@ -150,16 +160,14 @@ def iter_chunk_keys(
     base: Optional[Mapping[str, int]] = None
 ) -> Iterator[ChunkKey]:
   """Iterate over the ChunkKey objects corresponding to the given chunks."""
-  chunked_dims = chunks.keys()
   if base is None:
-    base = {dim: 0 for dim in chunked_dims}
+    base = {dim: 0 for dim in chunks}
   relative_offsets = _chunks_to_offsets(chunks)
   chunk_indices = [range(len(sizes)) for sizes in chunks.values()]
   for indices in itertools.product(*chunk_indices):
-    bounds = {
-        dim: base[dim] + relative_offsets[dim][i]
-        for dim, i in zip(chunked_dims, indices)
-    }
+    bounds = dict(base)
+    for dim, index in zip(chunks, indices):
+      bounds[dim] += relative_offsets[dim][index]
     yield ChunkKey(bounds)
 
 

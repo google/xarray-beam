@@ -123,6 +123,26 @@ class RechunkTest(test_util.TestCase):
       actual = consolidated | xarray_beam.SplitChunks({'x': 4})
       self.assertIdenticalChunks(actual, split)
 
+  def test_consolidate_and_split_only_some_dims(self):
+    chunk_data = np.arange(0, 10).reshape(2, 5)
+    split = [
+        (xarray_beam.ChunkKey({'x': 0, 'y': 0}),
+         xarray.Dataset({'foo': (('x', 'y'), chunk_data)})),
+        (xarray_beam.ChunkKey({'x': 0, 'y': 5}),
+         xarray.Dataset({'foo': (('x', 'y'), chunk_data + 10)})),
+    ]
+    all_data = np.concatenate([chunk_data, chunk_data + 10], axis=1)
+    consolidated = [
+        (xarray_beam.ChunkKey({'x': 0, 'y': 0}),
+         xarray.Dataset({'foo': (('x', 'y'), all_data)})),
+    ]
+    with self.subTest('ConsolidateChunks'):
+      actual = split | xarray_beam.ConsolidateChunks({'y': 10})
+      self.assertIdenticalChunks(actual, consolidated)
+    with self.subTest('SplitChunks'):
+      actual = consolidated | xarray_beam.SplitChunks({'y': 5})
+      self.assertIdenticalChunks(actual, split)
+
   def test_consolidate_with_minus_one_chunks(self):
     inputs = [
         (xarray_beam.ChunkKey({'x': 0}),

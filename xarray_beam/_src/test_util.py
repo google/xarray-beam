@@ -51,9 +51,15 @@ class EagerPipeline:
 
 class TestCase(parameterized.TestCase):
 
-  def assertIdenticalChunks(self, actual, expected):
+  def _assert_chunks(self, array_assert_func, actual, expected):
     actual = dict(actual)
     expected = dict(expected)
     self.assertEqual(expected.keys(), actual.keys(), msg='inconsistent keys')
     for key in expected:
-      xarray.testing.assert_identical(actual[key], expected[key])
+      array_assert_func(actual[key], expected[key])
+
+  def assertIdenticalChunks(self, actual, expected):
+    self._assert_chunks(xarray.testing.assert_identical, actual, expected)
+
+  def assertAllCloseChunks(self, actual, expected):
+    self._assert_chunks(xarray.testing.assert_allclose, actual, expected)
