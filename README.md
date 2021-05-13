@@ -22,9 +22,15 @@ working with large-scale Xarray datasets. For example, it leverages
 [Dask](https://dask.org/) for describing lazy arrays and for executing
 multi-threaded computation on a single machine.
 
-## How does Xarray-Beam compare to Dask?
+**🚨 Warning: Xarray-Beam is new and unpolished 🚨**
 
-![Xarray-Beam datamodel vs Xarray-Dask](./static/xarray-beam-vs-xarray-dask.png)
+Expect sharp edges 🔪 and performance cliffs 🧗, particularly related to the
+management of lazy data with Dask and reading/writing data with Zarr. We have
+used it to efficiently process 5 TB datasets. We _expect_ it to scale to PB size
+datasets but that's easier said than done. We welcome feedback and contributions
+from early adopters, and hope to have it ready for wider audience soon.
+
+## How does Xarray-Beam compare to Dask?
 
 We love Dask! Xarray-Beam explores a different part of the design space for
 distributed data pipelines than Xarray's built-in Dask integration:
@@ -53,6 +59,8 @@ distributed data pipelines than Xarray's built-in Dask integration:
   more mature than Dask, and in many cases are supported as a service by major
   commercial cloud providers.
 
+![Xarray-Beam datamodel vs Xarray-Dask](./static/xarray-beam-vs-xarray-dask.png)
+
 These design choices are not set in stone. In particular, in the future we
 _could_ imagine writing a high-level `xarray_beam.Dataset` that emulates the
 `xarray.Dataset` API, similar to the popular high-level DataFrame APIs in Beam,
@@ -62,8 +70,10 @@ representation similar to that used by dask.array.
 
 ## Getting started
 
-Xarray-Beam requires recent versions of xarray, apache_beam, dask, rechunker and
-zarr.
+Xarray-Beam requires recent versions of xarray, dask, rechunker and zarr. It
+currently needs to the _development version_ of apache_beam (2.30.0 or later).
+For good performance when writing Zarr files, we strongly recommend patching
+Xarray with [this pull request](https://github.com/pydata/xarray/pull/5252).
 
 TODO(shoyer): write a tutorial here! For now, see the test suite for examples.
 
