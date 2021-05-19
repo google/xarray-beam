@@ -42,7 +42,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install mypy-protobuf
+        python -m pip install mypy-protobuf==1.18
         python -m pip install git+https://github.com/apache/beam.git#subdirectory=sdks/python
         pip install dask rechunker zarr xarray absl-py pytest pytest-xdist
     - name: Test with pytest
