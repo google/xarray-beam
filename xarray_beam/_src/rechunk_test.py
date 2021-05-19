@@ -254,6 +254,60 @@ class RechunkTest(test_util.TestCase):
     )
     self.assertIdenticalChunks(actual, expected)
 
+  def test_rechunk_end_to_end(self):
+    data = np.random.RandomState(0).randint(2 ** 30, size=(10, 20, 30))
+    ds = xarray.Dataset({'foo': (('time', 'x', 'y'), data)})
+    key = xarray_beam.ChunkKey({'time': 0, 'x': 0, 'y': 0})
+    time_split = [(key, ds)] | xarray_beam.SplitChunks({'time': 1})
+    space_split = [(key, ds)] | xarray_beam.SplitChunks({'x': 5, 'y': 5})
+    with self.subTest('time-to-space'):
+      actual = time_split | rechunk.Rechunk(
+          dim_sizes=ds.sizes,
+          source_chunks={'time': 1, 'x': 20, 'y': 30},
+          target_chunks={'time': 10, 'x': 5, 'y': 5},
+          itemsize=8,
+          max_mem=10_000,
+      )
+      self.assertIdenticalChunks(actual, space_split)
+    with self.subTest('space-to-time'):
+      actual = space_split | rechunk.Rechunk(
+          dim_sizes=ds.sizes,
+          source_chunks={'time': 10, 'x': 5, 'y': 5},
+          target_chunks={'time': 1, 'x': 20, 'y': 30},
+          itemsize=8,
+          max_mem=10_000,
+      )
+      self.assertIdenticalChunks(actual, time_split)
+
+  def test_rechunk_not_all_dimensions(self):
+    data = np.random.RandomState(0).randint(2 ** 30, size=(10, 20, 30))
+    ds = xarray.Dataset({'foo': (('time', 'x', 'y'), data)})
+    key = xarray_beam.ChunkKey({'x': 0, 'y': 0})
+    y_split_with_time_key = (
+        [(key | {'time': 0}, ds)] | xarray_beam.SplitChunks({'y': 3})
+    )
+    x_split = [(key, ds)] | xarray_beam.SplitChunks({'x': 2})
+    actual = x_split | rechunk.Rechunk(
+        dim_sizes=ds.sizes,
+        source_chunks={'x': 2, 'y': -1},
+        target_chunks={'x': -1, 'y': 3},
+        itemsize=8,
+        max_mem=10_000,
+    )
+    self.assertIdenticalChunks(actual, y_split_with_time_key)
+
+    with self.assertRaisesRegex(
+        ValueError,
+        'source_chunks and target_chunks have different keys',
+    ):
+      rechunk.Rechunk(
+          dim_sizes=ds.sizes,
+          source_chunks={'x': 2},
+          target_chunks={'y': 3},
+          itemsize=8,
+          max_mem=10_000,
+      )
+
 
 if __name__ == '__main__':
   absltest.main()

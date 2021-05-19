@@ -62,6 +62,19 @@ class ChunkKeyTest(test_util.TestCase):
     with self.assertRaisesRegex(ValueError, 'non-zero offset'):
       key.to_slices({'x': 5})
 
+  def test_to_slices_base(self):
+    key = xarray_beam.ChunkKey({'x': 100, 'y': 210})
+
+    base = {'x': 100, 'y': 200}
+    expected = {'x': slice(0, 5, 1), 'y': slice(10, 20, 1)}
+    slices = key.to_slices({'x': 5, 'y': 10}, base=base)
+    self.assertEqual(slices, expected)
+
+    base = {'x': 100}
+    expected = {'x': slice(0, 5, 1), 'y': slice(210, 220, 1)}
+    slices = key.to_slices({'x': 5, 'y': 10}, base=base)
+    self.assertEqual(slices, expected)
+
   def test_operators(self):
     key = xarray_beam.ChunkKey({'x': 0, 'y': 10})
 
@@ -132,6 +145,16 @@ class DatasetToChunksTest(test_util.TestCase):
 
   def test_iter_chunk_keys_with_more_base_dims(self):
     actual = sorted(core.iter_chunk_keys({'x': (3, 3)}, base={'x': 30, 'y': 0}))
+    expected = [
+        xarray_beam.ChunkKey({'x': 30, 'y': 0}),
+        xarray_beam.ChunkKey({'x': 33, 'y': 0}),
+    ]
+    self.assertEqual(actual, expected)
+
+  def test_iter_chunk_keys_with_fewer_base_dims(self):
+    actual = sorted(
+        core.iter_chunk_keys({'x': (3, 3), 'y': (10,)}, base={'x': 30})
+    )
     expected = [
         xarray_beam.ChunkKey({'x': 30, 'y': 0}),
         xarray_beam.ChunkKey({'x': 33, 'y': 0}),

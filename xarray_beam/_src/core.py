@@ -25,6 +25,16 @@ import xarray
 from xarray_beam._src import threadmap
 
 
+def _default_base(
+    base: Optional[Mapping[str, int]],
+    keys: Sequence[str],
+) -> Dict[str, int]:
+  base = {} if base is None else dict(base)
+  for dim in keys:
+    base.setdefault(dim, 0)
+  return base
+
+
 @functools.total_ordering
 class ChunkKey(Mapping[str, int]):
   """An immutable mapping of dimension names to chunk offsets.
@@ -83,8 +93,7 @@ class ChunkKey(Mapping[str, int]):
       >>> key.to_slices({'x': 10}, base={'x': 100})
       {'x': slice(0, 10, 1)}
     """
-    if base is None:
-      base = {k: 0 for k in self._offsets}
+    base = _default_base(base, keys=self._offsets)
     slices = {}
     for k, v in self._offsets.items():
       offset = v - base[k]
@@ -160,8 +169,7 @@ def iter_chunk_keys(
     base: Optional[Mapping[str, int]] = None
 ) -> Iterator[ChunkKey]:
   """Iterate over the ChunkKey objects corresponding to the given chunks."""
-  if base is None:
-    base = {dim: 0 for dim in chunks}
+  base = _default_base(base, keys=chunks)
   relative_offsets = _chunks_to_offsets(chunks)
   chunk_indices = [range(len(sizes)) for sizes in chunks.values()]
   for indices in itertools.product(*chunk_indices):

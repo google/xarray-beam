@@ -247,13 +247,20 @@ class Rechunk(beam.PTransform):
 
     Args:
       dim_sizes: size of the full (combined) dataset of all chunks.
-      source_chunks: sizes of source chunks.
-      target_chunks: sizes of target chunks.
+      source_chunks: sizes of source chunks. Missing keys or values equal to -1
+        indicate "non-chunked" dimensions.
+      target_chunks: sizes of target chunks, like `source_keys`. Keys must
+        exactly match those found in source_chunks.
       itemsize: approximate number of bytes per xarray.Dataset element,
         after indexing out by all dimensions (i.e.,
         `dataset.nbytes / np.prod(dataset.sizes)`).
       max_mem: maximum memory that a single intermediate chunk may consume.
     """
+    if source_chunks.keys() != target_chunks.keys():
+      raise ValueError(
+          f'source_chunks and target_chunks have different keys: '
+          f'{source_chunks} vs {target_chunks}'
+      )
     self.dim_sizes = dim_sizes
     self.source_chunks = normalize_chunks(source_chunks, dim_sizes)
     self.target_chunks = normalize_chunks(target_chunks, dim_sizes)
