@@ -16,13 +16,8 @@
 import setuptools
 
 
-INSTALL_REQUIRES = [
-    'apache_beam',
-    'dask',
-    'rechunker',
-    'zarr',
-    'xarray',
-]
+base_requires = ['apache_beam', 'dask', 'rechunker', 'zarr', 'xarray']
+tests_requires = ['absl-py', 'pytest']
 
 setuptools.setup(
     name='xarray-beam',
@@ -30,7 +25,10 @@ setuptools.setup(
     license='Apache 2.0',
     author='Google LLC',
     author_email='noreply@google.com',
-    install_requires=INSTALL_REQUIRES,
+    install_requires=base_requires,
+    extras_require={
+        'tests': tests_requires,
+    },
     url='https://github.com/google/xarray-beam',
     packages=setuptools.find_packages(),
     python_requires='>=3',
