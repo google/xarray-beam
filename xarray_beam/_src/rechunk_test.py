@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tests for rechunk."""
+import unittest
 
 from absl.testing import absltest
 import numpy as np
@@ -37,20 +38,26 @@ class RechunkTest(test_util.TestCase):
     actual = rechunk.normalize_chunks(inputs, dim_sizes)
     self.assertEqual(expected, actual)
 
-    with self.assertRaisesRegex(
-        ValueError, 'chunks for dimension x are not constant',
-    ):
-      rechunk.normalize_chunks({'x': (3, 4)}, {'x': 7})
-
     inputs = {'x': 3, 'y': -1}
     expected = {'x': 3, 'y': 20}
     actual = rechunk.normalize_chunks(inputs, dim_sizes)
     self.assertEqual(expected, actual)
 
+    expected = {'x': 5}
+    actual = rechunk.normalize_chunks({'x': 5}, {'x': 9})
+    self.assertEqual(expected, actual)
+
+  def test_normalize_chunks_errors(self):
     with self.assertRaisesRegex(
-        ValueError, 'chunks for dimension x do not evenly divide',
+        ValueError, 'chunks for dimension x are not constant',
     ):
-      rechunk.normalize_chunks({'x': 5}, {'x': 9})
+      rechunk.normalize_chunks({'x': (3, 4)}, {'x': 7})
+
+    with self.assertRaisesRegex(
+        ValueError,
+        'all dimensions used in chunks must also have an indicated size',
+    ):
+      rechunk.normalize_chunks({'x': 10}, {'y': 10})
 
   def test_rechunking_plan(self):
     # this trivial case fits entirely into memory
@@ -307,6 +314,38 @@ class RechunkTest(test_util.TestCase):
           itemsize=8,
           max_mem=10_000,
       )
+
+  def test_rechunk_irregular(self):
+    raise unittest.SkipTest('not working yet')
+    # pylint: disable=unreachable
+    data = np.random.RandomState(0).randint(2 ** 30, size=(100,))
+    ds = xarray.Dataset({'foo': ('x', data)})
+    key = xarray_beam.ChunkKey({'x': 0})
+    inputs = [(key, ds)] | xarray_beam.SplitChunks({'x': 12})
+    expected = [(key, ds)] | xarray_beam.SplitChunks({'x': 15})
+    actual = inputs | rechunk.Rechunk(
+        dim_sizes=ds.sizes,
+        source_chunks={'x': 12},
+        target_chunks={'x': 15},
+        itemsize=8,
+        max_mem=8*100//2,  # half the full size
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_rechunk_uneven_2d(self):
+    data = np.random.RandomState(0).randint(2 ** 30, size=(100, 100))
+    ds = xarray.Dataset({'foo': (('x', 'y'), data)})
+    key = xarray_beam.ChunkKey({'x': 0, 'y': 0})
+    inputs = [(key, ds)] | xarray_beam.SplitChunks({'x': 12})
+    expected = [(key, ds)] | xarray_beam.SplitChunks({'y': 15})
+    actual = inputs | rechunk.Rechunk(
+        dim_sizes=ds.sizes,
+        source_chunks={'x': 12, 'y': -1},
+        target_chunks={'x': -1, 'y': 15},
+        itemsize=8,
+        max_mem=8*100*100//2,  # half the full size
+    )
+    self.assertIdenticalChunks(actual, expected)
 
 
 if __name__ == '__main__':

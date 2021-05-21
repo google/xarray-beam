@@ -127,13 +127,15 @@ def _unchunked_vars(ds: xarray.Dataset) -> List[str]:
 
 
 def _write_chunk_to_zarr(key, chunk, store, template):
+  """Write a single Dataset chunk to Zarr."""
   region = key.to_slices(chunk.sizes)
   already_written = [
       k for k in chunk.variables if k in _unchunked_vars(template)
   ]
   writable_chunk = chunk.drop_vars(already_written)
   try:
-    writable_chunk.to_zarr(store, region=region, compute=True)
+    future = writable_chunk.chunk().to_zarr(store, region=region, compute=False)
+    future.compute(num_workers=len(writable_chunk))
   except Exception as e:
     raise RuntimeError(
         f'failed to write chunk corresponding to key={key}:\n{writable_chunk}'
@@ -148,7 +150,7 @@ class ChunksToZarr(beam.PTransform):
       store: Union[str, MutableMapping[str, bytes]],
       template: Union[xarray.Dataset, beam.pvalue.AsSingleton, None] = None,
       zarr_chunks: Optional[Mapping[str, int]] = None,
-      num_threads: Optional[int] = 16,
+      num_threads: Optional[int] = None,
   ):
     """Initialize ChunksToZarr.
 
@@ -171,8 +173,11 @@ class ChunksToZarr(beam.PTransform):
            performance, supply the template explicitly (1 or 2).
       zarr_chunks: chunking scheme to use for Zarr. If set, overrides the
         chunking scheme on already chunked arrays in template.
-      num_threads: number of parallel threads per worker to use when writing
-        chunks.
+      num_threads: the number of Dataset chunks to write in parallel per worker.
+        More threads can increase throughput, but also increases memory usage
+        and makes it harder for Beam runners to shard work. Note that each
+        variable in a Dataset is already written in parallel, so this is most
+        useful for Datasets with a small number of variables.
     """
     if isinstance(template, xarray.Dataset):
       _setup_zarr(template, store, zarr_chunks)

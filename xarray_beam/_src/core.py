@@ -233,6 +233,19 @@ class DatasetToChunks(beam.PTransform):
       chunks: Optional[Mapping[str, Union[int, Tuple[int, ...]]]] = None,
       num_threads: Optional[int] = None,
   ):
+    """Initialize ChunksToZarr.
+
+    Args:
+      dataset: dataset to split into (ChunkKey, xarray.Dataset) pairs.
+      chunks: optional chunking scheme. Required if the dataset is *not*
+        already chunked. If the dataset *is* already chunked with Dask, `chunks`
+        takes precedence over the existing chunks.
+      num_threads: optional number of Dataset chunks to load in parallel per
+        worker. More threads can increase throughput, but also increases memory
+        usage and makes it harder for Beam runners to shard work. Note that each
+        variable in a Dataset is already loaded in parallel, so this is most
+        useful for Datasets with a small number of variables.
+    """
     if chunks is None:
       chunks = dataset.chunks
     if chunks is None:
@@ -249,12 +262,17 @@ class DatasetToChunks(beam.PTransform):
         for dim, offset in key.items()
     }
     slices = key.to_slices(sizes)
-    chunk = self.dataset.isel(slices).compute()
-    return key, chunk
+    chunk = self.dataset.isel(slices)
+    # Load the data, using a separate thread for each variable
+    num_threads = len(self.dataset.data_vars)
+    result = chunk.chunk().compute(num_workers=num_threads)
+    return key, result
 
   def expand(self, pcoll):
     return (
         pcoll
         | beam.Create(iter_chunk_keys(self.chunks))
-        | threadmap.ThreadMap(self._key_to_chunk, num_threads=self.num_threads)
+        | threadmap.ThreadMap(
+            self._key_to_chunk, num_threads=self.num_threads
+        )
     )
