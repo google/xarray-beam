@@ -27,6 +27,7 @@ from xarray_beam._src import core
 
 
 # pylint: disable=logging-not-lazy
+# pylint: disable=logging-format-interpolation
 
 
 def normalize_chunks(
@@ -243,15 +244,15 @@ def in_memory_rechunk(
 class RechunkStage(beam.PTransform):
   """A single stage of a rechunking pipeline."""
   source_chunks: Mapping[str, int]
-  intermediate_chunks: Mapping[str, int]
   target_chunks: Mapping[str, int]
 
   def expand(self, pcoll):
-    if self.source_chunks != self.intermediate_chunks:
-      pcoll |= 'PreSplit' >> SplitChunks(self.intermediate_chunks)
-    pcoll |= 'Consolidate' >> ConsolidateChunks(self.intermediate_chunks)
-    if self.intermediate_chunks != self.target_chunks:
+    source_values = self.source_chunks.values()
+    target_values = self.target_chunks.values()
+    if any(t % s for s, t in zip(source_values, target_values)):
       pcoll |= 'Split' >> SplitChunks(self.target_chunks)
+    if any(s % t for s, t in zip(source_values, target_values)):
+      pcoll |= 'Consolidate' >> ConsolidateChunks(self.target_chunks)
     return pcoll
 
 
@@ -303,28 +304,25 @@ class Rechunk(beam.PTransform):
         itemsize=itemsize,
         max_mem=max_mem,
     )
-    logging.info('Rechunking plan:\n' + '\n'.join(map(str, plan)))
-    # Rechunker currently always uses a two-step rechunking process.
     self.read_chunks, self.intermediate_chunks, self.write_chunks = plan
+
+    # TODO(shoyer): multi-stage rechunking, when supported by rechunker:
+    # https://github.com/pangeo-data/rechunker/pull/89
+    self.stage_in = [self.source_chunks, self.read_chunks, self.write_chunks]
+    self.stage_out = [self.read_chunks, self.write_chunks, self.target_chunks]
+    logging.info(
+        'Rechunking plan:\n' +
+        '\n'.join(f'{s} -> {t}' for s, t in zip(self.stage_in, self.stage_out))
+    )
+    min_size = itemsize * np.prod(list(self.intermediate_chunks.values()))
+    logging.info(f'Smallest intermediates have size {min_size:1.3e}')
 
   def expand(self, pcoll):
     # TODO(shoyer): consider splitting xarray.Dataset objects into separate
     # arrays for rechunking, which is more similar to what Rechunker does and
     # in principle could be more efficient.
-    if self.read_chunks == self.intermediate_chunks == self.write_chunks:
-      return (
-          pcoll
-          | 'OnlyStage' >> RechunkStage(
-              self.source_chunks, self.intermediate_chunks, self.target_chunks,
-          )
-      )
-    else:
-      return (
-          pcoll
-          | 'FirstStage' >> RechunkStage(
-              self.source_chunks, self.read_chunks, self.intermediate_chunks,
-          )
-          | 'SecondStage' >> RechunkStage(
-              self.intermediate_chunks, self.write_chunks, self.target_chunks,
-          )
-      )
+    for stage, (in_chunks, out_chunks) in enumerate(
+        zip(self.stage_in, self.stage_out)
+    ):
+      pcoll |= f'Stage{stage}' >> RechunkStage(in_chunks, out_chunks)
+    return pcoll

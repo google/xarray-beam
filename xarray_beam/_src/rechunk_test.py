@@ -296,8 +296,7 @@ class RechunkTest(test_util.TestCase):
          xarray.Dataset({'foo': (('x', 'y'), np.array([[30], [60]]))})),
     ]
     actual = inputs | rechunk.RechunkStage(
-        source_chunks={'x': 2, 'y': 3},
-        intermediate_chunks={'x': 2, 'y': 3},
+        source_chunks={'x': 1, 'y': 3},
         target_chunks={'x': 2, 'y': 1},
     )
     self.assertIdenticalChunks(actual, expected)
