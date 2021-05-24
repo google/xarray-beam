@@ -12,15 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tests for rechunk."""
-import unittest
-
 from absl.testing import absltest
+from absl.testing import parameterized
 import numpy as np
 import xarray
 import xarray_beam
 from xarray_beam._src import rechunk
 from xarray_beam._src import test_util
-
 
 # pylint: disable=expression-not-assigned
 
@@ -187,6 +185,48 @@ class RechunkTest(test_util.TestCase):
     with self.assertRaises(xarray.MergeError):
       inconsistent_inputs | xarray_beam.ConsolidateChunks({'x': -1})
 
+  @parameterized.parameters(
+      dict(start=0, stop=20, multiple=-1, expected=[(0, 20)]),
+      dict(start=0, stop=20, multiple=20, expected=[(0, 20)]),
+      dict(start=0, stop=20, multiple=100, expected=[(0, 20)]),
+      dict(start=0, stop=20, multiple=10, expected=[(0, 10), (10, 20)]),
+      dict(start=0, stop=20, multiple=15, expected=[(0, 15), (15, 20)]),
+      dict(
+          start=0,
+          stop=10,
+          multiple=3,
+          expected=[(0, 3), (3, 6), (6, 9), (9, 10)],
+      ),
+      dict(start=5, stop=10, multiple=3, expected=[(5, 6), (6, 9), (9, 10)]),
+      dict(start=10, stop=20, multiple=12, expected=[(10, 12), (12, 20)]),
+      dict(start=10, stop=20, multiple=100, expected=[(10, 20)]),
+    )
+  def test_split_chunk_bounds(self, start, stop, multiple, expected):
+    actual = rechunk._split_chunk_bounds(start, stop, multiple)
+    self.assertEqual(actual, expected)
+
+  def test_split_uneven_chunks(self):
+    inputs = [
+        (xarray_beam.ChunkKey({'x': 0}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xarray_beam.ChunkKey({'x': 5}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+    ]
+    expected = [
+        (xarray_beam.ChunkKey({'x': 0}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 3))})),
+        (xarray_beam.ChunkKey({'x': 3}),
+         xarray.Dataset({'foo': ('x', np.arange(3, 5))})),
+        (xarray_beam.ChunkKey({'x': 5}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 6))})),
+        (xarray_beam.ChunkKey({'x': 6}),
+         xarray.Dataset({'foo': ('x', np.arange(6, 9))})),
+        (xarray_beam.ChunkKey({'x': 9}),
+         xarray.Dataset({'foo': ('x', np.arange(9, 10))})),
+    ]
+    actual = inputs | xarray_beam.SplitChunks({'x': 3})
+    self.assertIdenticalChunks(actual, expected)
+
   def test_in_memory_rechunk_success(self):
     inputs = [
         (xarray_beam.ChunkKey({'x': 100, 'y': 300}),
@@ -256,7 +296,8 @@ class RechunkTest(test_util.TestCase):
          xarray.Dataset({'foo': (('x', 'y'), np.array([[30], [60]]))})),
     ]
     actual = inputs | rechunk.RechunkStage(
-        temp_chunks={'x': 2, 'y': 3},
+        source_chunks={'x': 2, 'y': 3},
+        intermediate_chunks={'x': 2, 'y': 3},
         target_chunks={'x': 2, 'y': 1},
     )
     self.assertIdenticalChunks(actual, expected)
@@ -315,20 +356,24 @@ class RechunkTest(test_util.TestCase):
           max_mem=10_000,
       )
 
-  def test_rechunk_irregular(self):
-    raise unittest.SkipTest('not working yet')
-    # pylint: disable=unreachable
-    data = np.random.RandomState(0).randint(2 ** 30, size=(100,))
+  @parameterized.parameters(
+      dict(size=100, max_mem=50, source_chunks=15, target_chunks=10),
+      dict(size=100, max_mem=50, source_chunks=10, target_chunks=15),
+      dict(size=100, max_mem=50, source_chunks=12, target_chunks=15),
+      dict(size=100, max_mem=20, source_chunks=5, target_chunks=7),
+  )
+  def test_rechunk_1d(self, size, max_mem, source_chunks, target_chunks):
+    data = np.random.RandomState(0).randint(2 ** 30, size=(size,))
     ds = xarray.Dataset({'foo': ('x', data)})
     key = xarray_beam.ChunkKey({'x': 0})
-    inputs = [(key, ds)] | xarray_beam.SplitChunks({'x': 12})
-    expected = [(key, ds)] | xarray_beam.SplitChunks({'x': 15})
+    inputs = [(key, ds)] | xarray_beam.SplitChunks({'x': source_chunks})
+    expected = [(key, ds)] | xarray_beam.SplitChunks({'x': target_chunks})
     actual = inputs | rechunk.Rechunk(
         dim_sizes=ds.sizes,
-        source_chunks={'x': 12},
-        target_chunks={'x': 15},
-        itemsize=8,
-        max_mem=8*100//2,  # half the full size
+        source_chunks={'x': source_chunks},
+        target_chunks={'x': target_chunks},
+        itemsize=1,
+        max_mem=max_mem,
     )
     self.assertIdenticalChunks(actual, expected)
 
@@ -342,8 +387,8 @@ class RechunkTest(test_util.TestCase):
         dim_sizes=ds.sizes,
         source_chunks={'x': 12, 'y': -1},
         target_chunks={'x': -1, 'y': 15},
-        itemsize=8,
-        max_mem=8*100*100//2,  # half the full size
+        itemsize=1,
+        max_mem=100*100//2,  # half the full size
     )
     self.assertIdenticalChunks(actual, expected)
 

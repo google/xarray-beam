@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Combiners for xarray-beam."""
+from typing import Any
 import apache_beam as beam
 import dataclasses
 
@@ -23,12 +24,15 @@ import dataclasses
 class MeanCombineFn(beam.transforms.CombineFn):
   """CombineFn for computing an arithmetic mean of xarray.Dataset objects."""
   skipna: bool = True
+  dtype: Any = None
 
   def create_accumulator(self):
     return (0, 0)
 
   def add_input(self, sum_count, element):
     (sum_, count) = sum_count
+    if self.dtype is not None:
+      element = element.astype(self.dtype)
     if self.skipna:
       new_sum = sum_ + element.fillna(0)
       new_count = count + element.notnull()
@@ -55,13 +59,17 @@ class Mean:
   @dataclasses.dataclass
   class Globally(beam.PTransform):
     skipna: bool = True
+    dtype: Any = None
 
     def expand(self, pcoll):
-      return pcoll | beam.CombineGlobally(MeanCombineFn(self.skipna))
+      combine_fn = MeanCombineFn(self.skipna, self.dtype)
+      return pcoll | beam.CombineGlobally(combine_fn)
 
   @dataclasses.dataclass
   class PerKey(beam.PTransform):
     skipna: bool = True
+    dtype: Any = None
 
     def expand(self, pcoll):
-      return pcoll | beam.CombinePerKey(MeanCombineFn(self.skipna))
+      combine_fn = MeanCombineFn(self.skipna, self.dtype)
+      return pcoll | beam.CombinePerKey(combine_fn)

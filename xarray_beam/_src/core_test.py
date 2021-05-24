@@ -135,32 +135,6 @@ class DatasetToChunksTest(test_util.TestCase):
     ]
     self.assertEqual(actual, expected)
 
-  def test_iter_chunk_keys_with_base(self):
-    actual = sorted(core.iter_chunk_keys({'x': (3, 3)}, base={'x': 30}))
-    expected = [
-        xarray_beam.ChunkKey({'x': 30}),
-        xarray_beam.ChunkKey({'x': 33}),
-    ]
-    self.assertEqual(actual, expected)
-
-  def test_iter_chunk_keys_with_more_base_dims(self):
-    actual = sorted(core.iter_chunk_keys({'x': (3, 3)}, base={'x': 30, 'y': 0}))
-    expected = [
-        xarray_beam.ChunkKey({'x': 30, 'y': 0}),
-        xarray_beam.ChunkKey({'x': 33, 'y': 0}),
-    ]
-    self.assertEqual(actual, expected)
-
-  def test_iter_chunk_keys_with_fewer_base_dims(self):
-    actual = sorted(
-        core.iter_chunk_keys({'x': (3, 3), 'y': (10,)}, base={'x': 30})
-    )
-    expected = [
-        xarray_beam.ChunkKey({'x': 30, 'y': 0}),
-        xarray_beam.ChunkKey({'x': 33, 'y': 0}),
-    ]
-    self.assertEqual(actual, expected)
-
   def test_compute_offset_index(self):
     actual = core.compute_offset_index({'x': (0, 3), 'y': (0, 2, 4)})
     expected = {'x': {0: 0, 3: 1}, 'y': {0: 0, 2: 1, 4: 2}}

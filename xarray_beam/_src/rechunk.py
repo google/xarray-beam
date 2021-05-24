@@ -13,6 +13,7 @@
 # limitations under the License.
 """Rechunking for xarray.Dataset objets."""
 import collections
+import itertools
 import logging
 from typing import Dict, Iterable, Iterator, List, Mapping, Tuple, Union
 
@@ -162,6 +163,30 @@ class ConsolidateChunks(beam.PTransform):
     )
 
 
+def _split_chunk_bounds(
+    start: int, stop: int, multiple: int,
+) -> List[Tuple[int, int]]:
+  # pylint: disable=g-doc-args
+  # pylint: disable=g-doc-return-or-yield
+  """Calculate the size of divided chunks along a dimension.
+
+  Example usage:
+
+    >>> _split_chunk_bounds(0, 10, 3)
+    [(0, 3), (3, 6), (6, 9), (9, 10)]
+    >>> _split_chunk_bounds(5, 10, 3)
+    [(5, 6), (6, 9), (9, 10)]
+    >>> _split_chunk_bounds(10, 20, 12)
+    [(10, 12), (12, 20)]
+  """
+  if multiple == -1:
+    return [(start, stop)]
+  assert start >= 0 and stop > start and multiple > 0, (start, stop, multiple)
+  first_multiple = (start // multiple + 1) * multiple
+  breaks = list(range(first_multiple, stop, multiple))
+  return list(zip([start] + breaks, breaks + [stop]))
+
+
 def split_chunks(
     key: core.ChunkKey,
     dataset: xarray.Dataset,
@@ -171,19 +196,26 @@ def split_chunks(
   # This function splits consolidated arrays into blocks of new sizes, e.g.,
   #       ⌈x_00 x_01 ...⌉   ⌈⌈x_00⌉ ⌈x_01⌉ ...⌉
   #   X = |x_10 x_11 ...| = ||x_10| |x_11| ...|
-  #       |x_20 x_21 ...|   |⌊x_20⌋ [x_21⌋ ...|
+  #       |x_20 x_21 ...|   |⌊x_20⌋ ⌊x_21⌋ ...|
   #       ⌊ ... ...  ...⌋   ⌊  ...    ...  ...⌋
   # and emits them as (ChunkKey, xarray.Dataset) pairs.
-  expanded_chunks = {}
+  all_bounds = []
   for dim, chunk_size in target_chunks.items():
-    multiple, remainder = divmod(dataset.sizes[dim], chunk_size)
-    expanded_chunks[dim] = (
-        multiple * (chunk_size,) + ((remainder,) if remainder else ())
-    )
-  for sub_key in core.iter_chunk_keys(expanded_chunks, base=key):
-    slices = sub_key.to_slices(target_chunks, base=key)
-    chunk = dataset.isel(slices)
-    yield sub_key, chunk
+    start = key.get(dim, 0)
+    stop = start + dataset.sizes[dim]
+    all_bounds.append(_split_chunk_bounds(start, stop, chunk_size))
+
+  for bounds in itertools.product(*all_bounds):
+    offsets = dict(key)
+    slices = {}
+    for dim, (start, stop) in zip(target_chunks, bounds):
+      base = key.get(dim, 0)
+      offsets[dim] = start
+      slices[dim] = slice(start - base, stop - base)
+
+    new_key = core.ChunkKey(offsets)
+    new_chunk = dataset.isel(slices)
+    yield new_key, new_chunk
 
 
 @dataclasses.dataclass
@@ -210,15 +242,17 @@ def in_memory_rechunk(
 @dataclasses.dataclass
 class RechunkStage(beam.PTransform):
   """A single stage of a rechunking pipeline."""
-  temp_chunks: Mapping[str, int]
+  source_chunks: Mapping[str, int]
+  intermediate_chunks: Mapping[str, int]
   target_chunks: Mapping[str, int]
 
   def expand(self, pcoll):
-    return (
-        pcoll
-        | 'Consolidate' >> ConsolidateChunks(self.temp_chunks)
-        | 'Split' >> SplitChunks(self.target_chunks)
-    )
+    if self.source_chunks != self.intermediate_chunks:
+      pcoll |= 'PreSplit' >> SplitChunks(self.intermediate_chunks)
+    pcoll |= 'Consolidate' >> ConsolidateChunks(self.intermediate_chunks)
+    if self.intermediate_chunks != self.target_chunks:
+      pcoll |= 'Split' >> SplitChunks(self.target_chunks)
+    return pcoll
 
 
 class Rechunk(beam.PTransform):
@@ -250,8 +284,8 @@ class Rechunk(beam.PTransform):
       target_chunks: sizes of target chunks, like `source_keys`. Keys must
         exactly match those found in source_chunks.
       itemsize: approximate number of bytes per xarray.Dataset element,
-        after indexing out by all dimensions (i.e.,
-        `dataset.nbytes / np.prod(dataset.sizes)`).
+        after indexing out by all dimensions, e.g., `4 * len(dataset)` for
+        float32 data or roughly `dataset.nbytes / np.prod(dataset.sizes)`.
       max_mem: maximum memory that a single intermediate chunk may consume.
     """
     if source_chunks.keys() != target_chunks.keys():
@@ -271,20 +305,26 @@ class Rechunk(beam.PTransform):
     )
     logging.info('Rechunking plan:\n' + '\n'.join(map(str, plan)))
     # Rechunker currently always uses a two-step rechunking process.
-    self.read_chunks, self.int_chunks, self.write_chunks = plan
+    self.read_chunks, self.intermediate_chunks, self.write_chunks = plan
 
   def expand(self, pcoll):
     # TODO(shoyer): consider splitting xarray.Dataset objects into separate
     # arrays for rechunking, which is more similar to what Rechunker does and
     # in principle could be more efficient.
-    if self.read_chunks == self.write_chunks:
+    if self.read_chunks == self.intermediate_chunks == self.write_chunks:
       return (
           pcoll
-          | 'OnlyStage' >> RechunkStage(self.read_chunks, self.target_chunks)
+          | 'OnlyStage' >> RechunkStage(
+              self.source_chunks, self.intermediate_chunks, self.target_chunks,
+          )
       )
     else:
       return (
           pcoll
-          | 'FirstStage' >> RechunkStage(self.read_chunks, self.int_chunks)
-          | 'SecondStage' >> RechunkStage(self.write_chunks, self.target_chunks)
+          | 'FirstStage' >> RechunkStage(
+              self.source_chunks, self.read_chunks, self.intermediate_chunks,
+          )
+          | 'SecondStage' >> RechunkStage(
+              self.intermediate_chunks, self.write_chunks, self.target_chunks,
+          )
       )

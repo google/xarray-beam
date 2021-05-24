@@ -166,17 +166,16 @@ def _chunks_to_offsets(
 
 def iter_chunk_keys(
     chunks: Mapping[str, Tuple[int, ...]],
-    base: Optional[Mapping[str, int]] = None
 ) -> Iterator[ChunkKey]:
   """Iterate over the ChunkKey objects corresponding to the given chunks."""
-  base = _default_base(base, keys=chunks)
-  relative_offsets = _chunks_to_offsets(chunks)
+  all_offsets = _chunks_to_offsets(chunks)
   chunk_indices = [range(len(sizes)) for sizes in chunks.values()]
   for indices in itertools.product(*chunk_indices):
-    bounds = dict(base)
-    for dim, index in zip(chunks, indices):
-      bounds[dim] += relative_offsets[dim][index]
-    yield ChunkKey(bounds)
+    offsets = {
+        dim: all_offsets[dim][index]
+        for dim, index in zip(chunks, indices)
+    }
+    yield ChunkKey(offsets)
 
 
 def compute_offset_index(

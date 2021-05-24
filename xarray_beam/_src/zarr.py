@@ -167,7 +167,7 @@ class ChunksToZarr(beam.PTransform):
            part of the pipeline.
         3. Finally, if `template` is None, then the structure of the desired
            Zarr store is discovered automatically by inspecting the inputs into
-           ChunkToZarr. This is an easy option, but can be quite expensive/slow
+           ChunksToZarr. This is an easy option, but can be quite expensive/slow
            for large datasets -- Beam runners will typically handle this by
            dumping a temporary copy of the complete dataset to disk. For best
            performance, supply the template explicitly (1 or 2).

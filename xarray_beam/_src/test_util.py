@@ -54,7 +54,7 @@ class TestCase(parameterized.TestCase):
   def _assert_chunks(self, array_assert_func, actual, expected):
     actual = dict(actual)
     expected = dict(expected)
-    self.assertEqual(expected.keys(), actual.keys(), msg='inconsistent keys')
+    self.assertEqual(list(expected), list(actual), msg='inconsistent keys')
     for key in expected:
       array_assert_func(actual[key], expected[key])
 
