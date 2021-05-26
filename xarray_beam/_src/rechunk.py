@@ -15,7 +15,9 @@
 import collections
 import itertools
 import logging
-from typing import Dict, Iterable, Iterator, List, Mapping, Tuple, Union
+from typing import (
+    Any, Dict, Iterable, Iterator, List, Optional, Mapping, Tuple, Union
+)
 
 import apache_beam as beam
 import dataclasses
@@ -94,6 +96,7 @@ def _round_chunk_key(
 
 def consolidate_chunks(
     inputs: Iterable[Tuple[core.ChunkKey, xarray.Dataset]],
+    combine_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[core.ChunkKey, xarray.Dataset]:
   """Combine chunks into a single (ChunkKey, Dataset) pair."""
   inputs = list(inputs)
@@ -130,13 +133,19 @@ def consolidate_chunks(
     assert nested_array[nested_key] is None
     nested_array[nested_key] = chunk
 
-  combined_dataset = xarray.combine_nested(
-      nested_array.tolist(),
-      concat_dim=list(offsets),
+  kwargs = dict(
       data_vars='minimal',
       coords='minimal',
       join='exact',
       combine_attrs='override',
+  )
+  if combine_kwargs is not None:
+    kwargs.update(combine_kwargs)
+
+  combined_dataset = xarray.combine_nested(
+      nested_array.tolist(),
+      concat_dim=list(offsets),
+      **kwargs
   )
   return combined_key, combined_dataset
 

@@ -40,7 +40,10 @@ class _DiscoverTemplate(beam.PTransform):
     return key, zeros
 
   def _consolidate_chunks(self, inputs):
-    _, template = rechunk.consolidate_chunks(inputs)
+    # don't bother with compatibility checks; we won't be computing the values
+    # here anyways
+    combine_kwargs = {'compat': 'override'}
+    _, template = rechunk.consolidate_chunks(inputs, combine_kwargs)
     return template
 
   def expand(self, pcoll):
