@@ -27,7 +27,7 @@ from xarray_beam._src import threadmap
 
 
 class _DiscoverTemplate(beam.PTransform):
-  """Discover the Zarr template from (ChunkKey, xarray.Dataset) pairs."""
+  """Discover the Zarr template from (Key, xarray.Dataset) pairs."""
 
   def _make_template_chunk(self, key, chunk):
     # Make a lazy Dask xarray.Dataset of all zeros shaped like this chunk.
@@ -39,11 +39,13 @@ class _DiscoverTemplate(beam.PTransform):
     zeros = xarray.zeros_like(chunk.chunk(-1))
     return key, zeros
 
-  def _consolidate_chunks(self, inputs):
+  def _consolidate(self, inputs):
     # don't bother with compatibility checks; we won't be computing the values
     # here anyways
-    combine_kwargs = {'compat': 'override'}
-    _, template = rechunk.consolidate_chunks(inputs, combine_kwargs)
+    kwargs = {'compat': 'override'}
+    _, template = rechunk.consolidate_fully(
+        inputs, combine_kwargs=kwargs, merge_kwargs=kwargs,
+    )
     return template
 
   def expand(self, pcoll):
@@ -51,7 +53,7 @@ class _DiscoverTemplate(beam.PTransform):
         pcoll
         | 'MakeChunk' >> beam.MapTuple(self._make_template_chunk)
         | 'ListChunks' >> beam.combiners.ToList()
-        | 'ConsolidateChunks' >> beam.Map(self._consolidate_chunks)
+        | 'ConsolidateChunks' >> beam.Map(self._consolidate)
     )
 
 
@@ -110,7 +112,7 @@ def _validate_chunk(key, chunk, template):
         'unexpected new indexes found in chunk but not template: '
         f'{unexpected_indexes}'
     )
-  region = key.to_slices(chunk.sizes)
+  region = core.offsets_to_slices(key.offsets, chunk.sizes)
   for dim, full_index in template.indexes.items():
     if dim in chunk.indexes:
       expected_index = full_index[region[dim]]
@@ -131,7 +133,7 @@ def _unchunked_vars(ds: xarray.Dataset) -> List[str]:
 
 def _write_chunk_to_zarr(key, chunk, store, template):
   """Write a single Dataset chunk to Zarr."""
-  region = key.to_slices(chunk.sizes)
+  region = core.offsets_to_slices(key.offsets, chunk.sizes)
   already_written = [
       k for k in chunk.variables if k in _unchunked_vars(template)
   ]

@@ -17,7 +17,7 @@ from absl.testing import parameterized
 import apache_beam as beam
 import numpy as np
 import xarray
-import xarray_beam
+import xarray_beam as xbeam
 from xarray_beam._src import test_util
 
 
@@ -27,11 +27,33 @@ from xarray_beam._src import test_util
 class IntegrationTest(test_util.TestCase):
 
   @parameterized.named_parameters(
-      {'testcase_name': 'eager', 'template_method': 'eager'},
-      {'testcase_name': 'lazy', 'template_method': 'lazy'},
-      {'testcase_name': 'infer', 'template_method': 'infer'}
+      {
+          'testcase_name': 'eager_unified',
+          'template_method': 'eager',
+          'split_vars': False,
+      },
+      {
+          'testcase_name': 'eager_split',
+          'template_method': 'eager',
+          'split_vars': True,
+      },
+      {
+          'testcase_name': 'lazy_unified',
+          'template_method': 'lazy',
+          'split_vars': False,
+      },
+      {
+          'testcase_name': 'infer_unified',
+          'template_method': 'infer',
+          'split_vars': False,
+      },
+      {
+          'testcase_name': 'infer_split',
+          'template_method': 'infer',
+          'split_vars': True,
+      },
   )
-  def test_rechunk_zarr_to_zarr(self, template_method):
+  def test_rechunk_zarr_to_zarr(self, template_method, split_vars):
     src_dir = self.create_tempdir('source').full_path
     dest_dir = self.create_tempdir('destination').full_path
 
@@ -40,7 +62,10 @@ class IntegrationTest(test_util.TestCase):
 
     rs = np.random.RandomState(0)
     raw_data = rs.randint(2**30, size=(60, 100, 120))  # 5.76 MB
-    dataset = xarray.Dataset({'foo': (('t', 'x', 'y'), raw_data)})
+    dataset = xarray.Dataset({
+        'foo': (('t', 'x', 'y'), raw_data),
+        'bar': (('t', 'x', 'y'), raw_data - 1),
+    })
     dataset.chunk(source_chunks).to_zarr(src_dir, consolidated=True)
 
     on_disk = xarray.open_zarr(src_dir, consolidated=True)
@@ -58,13 +83,13 @@ class IntegrationTest(test_util.TestCase):
       # run pipeline
       (
           pipeline
-          | xarray_beam.DatasetToChunks(on_disk)
-          | xarray_beam.Rechunk(
+          | xbeam.DatasetToChunks(on_disk, split_vars=split_vars)
+          | xbeam.Rechunk(
               on_disk.sizes, source_chunks, target_chunks,
               itemsize=8,
               max_mem=10_000_000,  # require two stages
           )
-          | xarray_beam.ChunksToZarr(dest_dir, target_template)
+          | xbeam.ChunksToZarr(dest_dir, target_template)
       )
     roundtripped = xarray.open_zarr(dest_dir, consolidated=True, chunks=False)
 

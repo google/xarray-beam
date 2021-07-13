@@ -17,6 +17,8 @@ import tempfile
 
 from absl.testing import parameterized
 import apache_beam as beam
+import numpy as np
+import pandas as pd
 import xarray
 
 # pylint: disable=expression-not-assigned
@@ -63,3 +65,29 @@ class TestCase(parameterized.TestCase):
 
   def assertAllCloseChunks(self, actual, expected):
     self._assert_chunks(xarray.testing.assert_allclose, actual, expected)
+
+
+def dummy_era5_surface_dataset(
+    variables=2,
+    latitudes=73,
+    longitudes=144,
+    times=365*4,
+    freq='6H',
+):
+  """A mock version of the Pangeo ERA5 surface reanalysis dataset."""
+  # based on: gs://pangeo-era5/reanalysis/spatial-analysis
+  dims = ('time', 'latitude', 'longitude')
+  shape = (times, latitudes, longitudes)
+  var_names = ['asn', 'd2m', 'e', 'mn2t', 'mx2t', 'ptype'][:variables]
+  rng = np.random.default_rng(0)
+  data_vars = {
+      name: (dims, rng.normal(size=shape).astype(np.float32), {'var_index': i})
+      for i, name in enumerate(var_names)
+  }
+
+  latitude = np.linspace(90, 90, num=latitudes)
+  longitude = np.linspace(0, 360, num=longitudes, endpoint=False)
+  time = pd.date_range('1979-01-01T00', periods=times, freq=freq)
+  coords = {'time': time, 'latitude': latitude, 'longitude': longitude}
+
+  return xarray.Dataset(data_vars, coords, {'global_attr': 'yes'})

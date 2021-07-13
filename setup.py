@@ -16,12 +16,23 @@
 import setuptools
 
 
-base_requires = ['apache_beam>=2.31.0', 'dask', 'rechunker', 'zarr', 'xarray']
-tests_requires = ['absl-py', 'pytest']
+base_requires = [
+    'apache_beam>=2.31.0',
+    'dask',
+    'immutabledict',
+    'rechunker',
+    'zarr',
+    'xarray',
+]
+tests_requires = [
+    'absl-py',
+    'pandas',
+    'pytest',
+]
 
 setuptools.setup(
     name='xarray-beam',
-    version='0.0.1',
+    version='0.2.0 ',
     license='Apache 2.0',
     author='Google LLC',
     author_email='noreply@google.com',
