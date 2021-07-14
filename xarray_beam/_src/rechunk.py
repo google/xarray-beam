@@ -18,6 +18,7 @@ import logging
 from typing import (
     Any, Dict, Iterable, Iterator, List, Optional, Mapping, Tuple, Union
 )
+import textwrap
 
 import apache_beam as beam
 import dataclasses
@@ -142,11 +143,29 @@ def consolidate_chunks(
   if combine_kwargs is not None:
     kwargs.update(combine_kwargs)
 
-  combined_dataset = xarray.combine_nested(
-      nested_array.tolist(),
-      concat_dim=list(offsets),
-      **kwargs
-  )
+  try:
+    combined_dataset = xarray.combine_nested(
+        nested_array.tolist(),
+        concat_dim=list(offsets),
+        **kwargs
+    )
+  except (ValueError, xarray.MergeError) as original_error:
+    summaries = []
+    for axis, dim in enumerate(offsets):
+      repr_string = '\n'.join(
+          repr(ds) for ds in nested_array[(0,) * axis + (slice(2),)].tolist()
+      )
+      if nested_array.shape[axis] > 2:
+        repr_string += '\n...'
+      repr_string = textwrap.indent(repr_string, prefix='  ')
+      summaries.append(
+          f'Leading datasets along dimension {dim!r}:\n{repr_string}'
+      )
+    summaries_str = '\n'.join(summaries)
+    raise ValueError(
+        f'combining nested dataset chunks with offsets {offsets} failed.\n'
+        + summaries_str
+    ) from original_error
   return combined_key, combined_dataset
 
 

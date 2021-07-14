@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tests for rechunk."""
+import re
+import textwrap
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import numpy as np
@@ -182,7 +185,25 @@ class RechunkTest(test_util.TestCase):
         (xarray_beam.ChunkKey({'x': 10}),
          xarray.Dataset({'foo': ('x', np.arange(10, 20)), 'bar': 2})),
     ]
-    with self.assertRaises(xarray.MergeError):
+    with self.assertRaisesRegexp(
+        ValueError,
+        re.escape(textwrap.dedent("""
+            combining nested dataset chunks with offsets {'x': [0, 10]} failed.
+            Leading datasets along dimension 'x':
+              <xarray.Dataset>
+              Dimensions:  (x: 10)
+              Dimensions without coordinates: x
+              Data variables:
+                  foo      (x) int64 0 1 2 3 4 5 6 7 8 9
+                  bar      int64 1
+              <xarray.Dataset>
+              Dimensions:  (x: 10)
+              Dimensions without coordinates: x
+              Data variables:
+                  foo      (x) int64 10 11 12 13 14 15 16 17 18 19
+                  bar      int64 2
+        """).strip())
+    ):
       inconsistent_inputs | xarray_beam.ConsolidateChunks({'x': -1})
 
   @parameterized.parameters(
