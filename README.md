@@ -71,9 +71,9 @@ representation similar to that used by dask.array.
 ## Getting started
 
 Xarray-Beam requires recent versions of xarray, dask, rechunker and zarr. It
-currently needs to the _development version_ of apache_beam (2.31.0 or later).
-For good performance when writing Zarr files, we strongly recommend patching
-Xarray with [this pull request](https://github.com/pydata/xarray/pull/5252).
+needs the latest release of Apache Beam (2.31.0 or later). For good performance
+when writing Zarr files, we strongly recommend patching Xarray with
+[this pull request](https://github.com/pydata/xarray/pull/5252).
 
 TODO(shoyer): write a tutorial here! For now, see the test suite for examples.
 

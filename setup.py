@@ -16,7 +16,7 @@
 import setuptools
 
 
-base_requires = ['apache_beam', 'dask', 'rechunker', 'zarr', 'xarray']
+base_requires = ['apache_beam>=2.31.0', 'dask', 'rechunker', 'zarr', 'xarray']
 tests_requires = ['absl-py', 'pytest']
 
 setuptools.setup(

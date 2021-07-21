@@ -185,7 +185,7 @@ class RechunkTest(test_util.TestCase):
         (xarray_beam.ChunkKey({'x': 10}),
          xarray.Dataset({'foo': ('x', np.arange(10, 20)), 'bar': 2})),
     ]
-    with self.assertRaisesRegexp(
+    with self.assertRaisesRegex(
         ValueError,
         re.escape(textwrap.dedent("""
             combining nested dataset chunks with offsets {'x': [0, 10]} failed.
