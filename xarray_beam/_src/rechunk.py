@@ -65,17 +65,22 @@ def rechunking_plan(
     source_chunks: Mapping[str, int],
     target_chunks: Mapping[str, int],
     itemsize: int,
+    min_mem: int,
     max_mem: int,
-) -> List[Dict[str, int]]:
+) -> List[List[Dict[str, int]]]:
   """Make a rechunking plan."""
-  plan_shapes = algorithm.rechunking_plan(
+  stages = algorithm.multistage_rechunking_plan(
       shape=tuple(dim_sizes.values()),
       source_chunks=tuple(source_chunks[dim] for dim in dim_sizes),
       target_chunks=tuple(target_chunks[dim] for dim in dim_sizes),
       itemsize=itemsize,
+      min_mem=min_mem,
       max_mem=max_mem,
   )
-  return [dict(zip(dim_sizes.keys(), shapes)) for shapes in plan_shapes]
+  plan = []
+  for stage in stages:
+    plan.append([dict(zip(dim_sizes.keys(), shapes)) for shapes in stage])
+  return plan
 
 
 def _round_chunk_key(
@@ -302,7 +307,8 @@ class Rechunk(beam.PTransform):
       source_chunks: Mapping[str, Union[int, Tuple[int, ...]]],
       target_chunks: Mapping[str, Union[int, Tuple[int, ...]]],
       itemsize: int,
-      max_mem: int = 2**30,  # 1 GB
+      min_mem: Optional[int] = None,
+      max_mem: int = 2**30,
   ):
     """Initialize Rechunk().
 
@@ -315,6 +321,7 @@ class Rechunk(beam.PTransform):
       itemsize: approximate number of bytes per xarray.Dataset element,
         after indexing out by all dimensions, e.g., `4 * len(dataset)` for
         float32 data or roughly `dataset.nbytes / np.prod(dataset.sizes)`.
+      min_mem: minimum memory that a single intermediate chunk may consume.
       max_mem: maximum memory that a single intermediate chunk may consume.
     """
     if source_chunks.keys() != target_chunks.keys():
@@ -322,6 +329,8 @@ class Rechunk(beam.PTransform):
           f'source_chunks and target_chunks have different keys: '
           f'{source_chunks} vs {target_chunks}'
       )
+    if min_mem is None:
+      min_mem = max_mem // 100
     self.dim_sizes = dim_sizes
     self.source_chunks = normalize_chunks(source_chunks, dim_sizes)
     self.target_chunks = normalize_chunks(target_chunks, dim_sizes)
@@ -330,19 +339,24 @@ class Rechunk(beam.PTransform):
         self.source_chunks,
         self.target_chunks,
         itemsize=itemsize,
+        min_mem=min_mem,
         max_mem=max_mem,
     )
-    self.read_chunks, self.intermediate_chunks, self.write_chunks = plan
+    plan = ([[self.source_chunks, self.source_chunks, plan[0][0]]]
+            + plan
+            + [[plan[-1][-1], self.target_chunks, self.target_chunks]])
+    self.stage_in, temporaries, self.stage_out = zip(*plan)
 
     # TODO(shoyer): multi-stage rechunking, when supported by rechunker:
     # https://github.com/pangeo-data/rechunker/pull/89
-    self.stage_in = [self.source_chunks, self.read_chunks, self.write_chunks]
-    self.stage_out = [self.read_chunks, self.write_chunks, self.target_chunks]
     logging.info(
         'Rechunking plan:\n' +
-        '\n'.join(f'{s} -> {t}' for s, t in zip(self.stage_in, self.stage_out))
+        '\n'.join(
+            f'Stage{i}: {s} -> {t}'
+            for i, (s, t) in enumerate(zip(self.stage_in, self.stage_out))
+        )
     )
-    min_size = itemsize * np.prod(list(self.intermediate_chunks.values()))
+    min_size = min(itemsize * np.prod(list(t.values())) for t in temporaries)
     logging.info(f'Smallest intermediates have size {min_size:1.3e}')
 
   def expand(self, pcoll):
