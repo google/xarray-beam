@@ -409,6 +409,7 @@ class Rechunk(beam.PTransform):
   """Rechunk to an arbitrary new chunking scheme with bounded memory usage.
 
   The approach taken here builds on Rechunker [1], but differs in two key ways:
+
   1. It is performed via collective Beam operations, instead of writing
      intermediates arrays to disk.
   2. It is performed collectively on full xarray.Dataset objects, instead of
