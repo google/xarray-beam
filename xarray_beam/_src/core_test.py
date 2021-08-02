@@ -15,123 +15,177 @@
 
 from absl.testing import absltest
 import apache_beam as beam
+import immutabledict
 import numpy as np
 import xarray
-import xarray_beam
+import xarray_beam as xbeam
 from xarray_beam._src import core
 from xarray_beam._src import test_util
-
 
 # pylint: disable=expression-not-assigned
 # pylint: disable=pointless-statement
 
 
-class ChunkKeyTest(test_util.TestCase):
+class KeyTest(test_util.TestCase):
 
-  def test_mapping(self):
-    key = xarray_beam.ChunkKey({'x': 0, 'y': 10})
-    self.assertEqual(list(key.keys()), ['x', 'y'])
-    self.assertEqual(list(key.values()), [0, 10])
-    self.assertIn('x', key)
-    self.assertNotIn('z', key)
-    self.assertEqual(key['x'], 0)
+  def test_constructor(self):
+    key = xbeam.Key({'x': 0, 'y': 10})
+    self.assertIsInstance(key.offsets, immutabledict.immutabledict)
+    self.assertEqual(dict(key.offsets), {'x': 0, 'y': 10})
+    self.assertEqual(key.vars, None)
 
-  def test_immutability(self):
-    key = xarray_beam.ChunkKey({'x': 0, 'y': 10})
+    key = xbeam.Key(vars={'foo'})
+    self.assertEqual(dict(key.offsets), {})
+    self.assertIsInstance(key.vars, frozenset)
+    self.assertEqual(set(key.vars), {'foo'})
 
-    with self.assertRaises(TypeError):
-      key['z'] = 100
+    with self.assertRaisesRegex(TypeError, 'vars must be a set or None'):
+      xbeam.Key(vars='foo')
 
-    dict_ = {key: 'foo'}
-    self.assertEqual(dict_[key], 'foo')
+  def test_replace(self):
+    key = xbeam.Key({'x': 0}, {'foo'})
 
-  def test_to_slices(self):
-    key = xarray_beam.ChunkKey({'x': 0, 'y': 10})
+    expected = xbeam.Key({'x': 1}, {'foo'})
+    actual = key.replace({'x': 1})
+    self.assertEqual(expected, actual)
 
-    expected = {'x': slice(0, 5, 1), 'y': slice(10, 20, 1)}
-    slices = key.to_slices({'x': 5, 'y': 10})
-    self.assertEqual(slices, expected)
+    expected = xbeam.Key({'y': 1}, {'foo'})
+    actual = key.replace({'y': 1})
+    self.assertEqual(expected, actual)
 
-    slices = key.to_slices({'x': 5, 'y': 10, 'extra_key': 100})
-    self.assertEqual(slices, expected)
+    expected = xbeam.Key({'x': 0})
+    actual = key.replace(vars=None)
+    self.assertEqual(expected, actual)
 
-    expected = {'x': slice(None), 'y': slice(10, 20, 1)}
-    slices = key.to_slices({'y': 10})
-    self.assertEqual(slices, expected)
+    expected = xbeam.Key({'x': 0}, {'bar'})
+    actual = key.replace(vars={'bar'})
+    self.assertEqual(expected, actual)
 
-    with self.assertRaisesRegex(ValueError, 'non-zero offset'):
-      key.to_slices({'x': 5})
+    expected = xbeam.Key({'y': 1}, {'foo'})
+    actual = key.replace({'y': 1}, {'foo'})
+    self.assertEqual(expected, actual)
 
-  def test_to_slices_base(self):
-    key = xarray_beam.ChunkKey({'x': 100, 'y': 210})
+    expected = xbeam.Key({'y': 1}, {'bar'})
+    actual = key.replace({'y': 1}, {'bar'})
+    self.assertEqual(expected, actual)
 
-    base = {'x': 100, 'y': 200}
-    expected = {'x': slice(0, 5, 1), 'y': slice(10, 20, 1)}
-    slices = key.to_slices({'x': 5, 'y': 10}, base=base)
-    self.assertEqual(slices, expected)
+  def test_with_offsets(self):
+    key = xbeam.Key({'x': 0})
 
-    base = {'x': 100}
-    expected = {'x': slice(0, 5, 1), 'y': slice(210, 220, 1)}
-    slices = key.to_slices({'x': 5, 'y': 10}, base=base)
-    self.assertEqual(slices, expected)
+    expected = xbeam.Key({'x': 1})
+    actual = key.with_offsets(x=1)
+    self.assertEqual(expected, actual)
 
-  def test_operators(self):
-    key = xarray_beam.ChunkKey({'x': 0, 'y': 10})
+    expected = xbeam.Key({'x': 0, 'y': 1})
+    actual = key.with_offsets(y=1)
+    self.assertEqual(expected, actual)
 
-    expected = xarray_beam.ChunkKey({'x': 0, 'y': 10, 'z': 100})
-    actual = key | {'z': 100}
-    self.assertEqual(actual, expected)
+    expected = xbeam.Key()
+    actual = key.with_offsets(x=None)
+    self.assertEqual(expected, actual)
 
-    expected = xarray_beam.ChunkKey({'y': 10})
-    actual = key - {'x'}
-    self.assertEqual(actual, expected)
+    expected = xbeam.Key({'y': 1, 'z': 2})
+    actual = key.with_offsets(x=None, y=1, z=2)
+    self.assertEqual(expected, actual)
 
-    with self.assertRaises(TypeError):
-      key - 'x'
-
-    with self.assertRaisesRegex(ValueError, 'not found'):
-      key - {'z'}
+    key2 = xbeam.Key({'x': 0}, vars={'foo'})
+    expected = xbeam.Key({'x': 1}, vars={'foo'})
+    actual = key2.with_offsets(x=1)
+    self.assertEqual(expected, actual)
 
   def test_repr(self):
-    key = xarray_beam.ChunkKey({'x': 0, 'y': 10})
-    expected = "ChunkKey({'x': 0, 'y': 10})"
+    key = xbeam.Key({'x': 0, 'y': 10})
+    expected = "Key(offsets={'x': 0, 'y': 10}, vars=None)"
     self.assertEqual(repr(key), expected)
 
-  def test_comparison(self):
-    key = xarray_beam.ChunkKey({'x': 0, 'y': 10})
-    with self.assertRaises(TypeError):
-      key < 'foo'
-    with self.assertRaisesRegex(ValueError, 'Dimensions must match'):
-      key < xarray_beam.ChunkKey({'x': 0})
-    other = xarray_beam.ChunkKey({'x': 0, 'y': 20})
-    self.assertLess(key, other)
-    self.assertGreater(other, key)
+    key = xbeam.Key(vars={'foo'})
+    expected = "Key(offsets={}, vars={'foo'})"
+    self.assertEqual(repr(key), expected)
 
-  def test_use_as_beam_key(self):
+  def test_dict_key(self):
+    first = {xbeam.Key({'x': 0, 'y': 10}): 1}
+    second = {xbeam.Key({'x': 0, 'y': 10}): 1}
+    self.assertEqual(first, second)
+
+  def test_equality(self):
+    key = xbeam.Key({'x': 0, 'y': 10})
+    self.assertEqual(key, key)
+    self.assertNotEqual(key, None)
+
+    key2 = xbeam.Key({'x': 0, 'y': 10}, {'bar'})
+    self.assertEqual(key2, key2)
+    self.assertNotEqual(key, key2)
+    self.assertNotEqual(key2, key)
+
+  def test_offsets_as_beam_key(self):
     inputs = [
-        (xarray_beam.ChunkKey({'x': 0, 'y': 1}), 1),
-        (xarray_beam.ChunkKey({'x': 0, 'y': 2}), 2),
-        (xarray_beam.ChunkKey({'y': 1, 'x': 0}), 3),
+        (xbeam.Key({'x': 0, 'y': 1}), 1),
+        (xbeam.Key({'x': 0, 'y': 2}), 2),
+        (xbeam.Key({'y': 1, 'x': 0}), 3),
     ]
     expected = [
-        (xarray_beam.ChunkKey({'x': 0, 'y': 1}), [1, 3]),
-        (xarray_beam.ChunkKey({'x': 0, 'y': 2}), [2]),
+        (xbeam.Key({'x': 0, 'y': 1}), [1, 3]),
+        (xbeam.Key({'x': 0, 'y': 2}), [2]),
+    ]
+    actual = inputs | beam.GroupByKey()
+    self.assertEqual(actual, expected)
+
+  def test_vars_as_beam_key(self):
+    inputs = [
+        (xbeam.Key(vars={'foo'}), 1),
+        (xbeam.Key(vars={'bar'}), 2),
+        (xbeam.Key(vars={'foo'}), 3),
+    ]
+    expected = [
+        (xbeam.Key(vars={'foo'}), [1, 3]),
+        (xbeam.Key(vars={'bar'}), [2]),
     ]
     actual = inputs | beam.GroupByKey()
     self.assertEqual(actual, expected)
 
 
+class TestOffsetsToSlices(test_util.TestCase):
+
+  def test_offsets_to_slices(self):
+    offsets = {'x': 0, 'y': 10}
+
+    expected = {'x': slice(0, 5, 1), 'y': slice(10, 20, 1)}
+    slices = core.offsets_to_slices(offsets, {'x': 5, 'y': 10})
+    self.assertEqual(slices, expected)
+
+    slices = core.offsets_to_slices(
+        offsets, {'x': 5, 'y': 10, 'extra_key': 100}
+    )
+    self.assertEqual(slices, expected)
+
+    with self.assertRaises(KeyError):
+      core.offsets_to_slices(offsets, {'y': 10})
+
+  def test_offsets_to_slices_base(self):
+    offsets = {'x': 100, 'y': 210}
+
+    base = {'x': 100, 'y': 200}
+    expected = {'x': slice(0, 5, 1), 'y': slice(10, 20, 1)}
+    slices = core.offsets_to_slices(offsets, {'x': 5, 'y': 10}, base=base)
+    self.assertEqual(slices, expected)
+
+    base = {'x': 100}
+    expected = {'x': slice(0, 5, 1), 'y': slice(210, 220, 1)}
+    slices = core.offsets_to_slices(offsets, {'x': 5, 'y': 10}, base=base)
+    self.assertEqual(slices, expected)
+
+
 class DatasetToChunksTest(test_util.TestCase):
 
   def test_iter_chunk_keys(self):
-    actual = sorted(core.iter_chunk_keys({'x': (3, 3), 'y': (2, 2, 2)}))
+    actual = list(core.iter_chunk_keys({'x': (3, 3), 'y': (2, 2, 2)}))
     expected = [
-        xarray_beam.ChunkKey({'x': 0, 'y': 0}),
-        xarray_beam.ChunkKey({'x': 0, 'y': 2}),
-        xarray_beam.ChunkKey({'x': 0, 'y': 4}),
-        xarray_beam.ChunkKey({'x': 3, 'y': 0}),
-        xarray_beam.ChunkKey({'x': 3, 'y': 2}),
-        xarray_beam.ChunkKey({'x': 3, 'y': 4}),
+        xbeam.Key({'x': 0, 'y': 0}),
+        xbeam.Key({'x': 0, 'y': 2}),
+        xbeam.Key({'x': 0, 'y': 4}),
+        xbeam.Key({'x': 3, 'y': 0}),
+        xbeam.Key({'x': 3, 'y': 2}),
+        xbeam.Key({'x': 3, 'y': 4}),
     ]
     self.assertEqual(actual, expected)
 
@@ -154,7 +208,8 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertEqual(actual, expected)
 
     with self.assertRaisesRegex(
-        ValueError, 'sum of provided chunks does not match',
+        ValueError,
+        'sum of provided chunks does not match',
     ):
       core.normalize_expanded_chunks({'x': (5, 5, 5)}, {'x': 10})
 
@@ -169,39 +224,56 @@ class DatasetToChunksTest(test_util.TestCase):
   def test_dataset_to_chunks_multiple(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
     expected = [
-        (xarray_beam.ChunkKey({'x': 0}), dataset.head(x=3)),
-        (xarray_beam.ChunkKey({'x': 3}), dataset.tail(x=3)),
+        (xbeam.Key({'x': 0}), dataset.head(x=3)),
+        (xbeam.Key({'x': 3}), dataset.tail(x=3)),
     ]
     actual = (
         test_util.EagerPipeline()
-        | xarray_beam.DatasetToChunks(dataset.chunk({'x': 3}))
+        | xbeam.DatasetToChunks(dataset.chunk({'x': 3}))
     )
     self.assertIdenticalChunks(actual, expected)
 
     actual = (
         test_util.EagerPipeline()
-        | xarray_beam.DatasetToChunks(dataset.chunk({'x': 3}), num_threads=2)
+        | xbeam.DatasetToChunks(dataset.chunk({'x': 3}), num_threads=2)
     )
     self.assertIdenticalChunks(actual, expected)
 
     actual = (
         test_util.EagerPipeline()
-        | xarray_beam.DatasetToChunks(dataset, chunks={'x': 3})
+        | xbeam.DatasetToChunks(dataset, chunks={'x': 3})
     )
     self.assertIdenticalChunks(actual, expected)
 
   def test_dataset_to_chunks_whole(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
-    expected = [(xarray_beam.ChunkKey({'x': 0}), dataset)]
+    expected = [(xbeam.Key({'x': 0}), dataset)]
     actual = (
         test_util.EagerPipeline()
-        | xarray_beam.DatasetToChunks(dataset, chunks={'x': -1})
+        | xbeam.DatasetToChunks(dataset, chunks={'x': -1})
     )
     self.assertIdenticalChunks(actual, expected)
 
     actual = (
         test_util.EagerPipeline()
-        | xarray_beam.DatasetToChunks(dataset, chunks={})
+        | xbeam.DatasetToChunks(dataset, chunks={})
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_dataset_to_chunks_vars(self):
+    dataset = xarray.Dataset({
+        'foo': ('x', np.arange(6)),
+        'bar': ('x', -np.arange(6)),
+    })
+    expected = [
+        (xbeam.Key({'x': 0}, {'foo'}), dataset.head(x=3)[['foo']]),
+        (xbeam.Key({'x': 0}, {'bar'}), dataset.head(x=3)[['bar']]),
+        (xbeam.Key({'x': 3}, {'foo'}), dataset.tail(x=3)[['foo']]),
+        (xbeam.Key({'x': 3}, {'bar'}), dataset.tail(x=3)[['bar']]),
+    ]
+    actual = (
+        test_util.EagerPipeline()
+        | xbeam.DatasetToChunks(dataset, chunks={'x': 3}, split_vars=True)
     )
     self.assertIdenticalChunks(actual, expected)
 

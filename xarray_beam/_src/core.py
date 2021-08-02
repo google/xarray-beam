@@ -12,147 +12,169 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Core data model for xarray-beam."""
-import functools
 import itertools
 from typing import (
-    AbstractSet, Dict, List, Iterator, Optional, Mapping, Sequence, Tuple,
+    AbstractSet,
+    Container,
+    Dict,
+    List,
+    Iterator,
+    Optional,
+    Mapping,
+    Sequence,
+    Tuple,
     Union,
 )
+
 import apache_beam as beam
+import immutabledict
 import numpy as np
 import xarray
 
 from xarray_beam._src import threadmap
 
-
-def _default_base(
-    base: Optional[Mapping[str, int]],
-    keys: Sequence[str],
-) -> Dict[str, int]:
-  base = {} if base is None else dict(base)
-  for dim in keys:
-    base.setdefault(dim, 0)
-  return base
+_DEFAULT = object()
 
 
-@functools.total_ordering
-class ChunkKey(Mapping[str, int]):
-  """An immutable mapping of dimension names to chunk offsets.
+class Key:
+  """A key for keeping track of chunks of a distributed xarray.Dataset.
 
-  Values indicate integer offset from the origin for dealing with an individual
-  "chunk" of a larger xarray.Dataset.
+  Key object in Xarray-Beam include two components:
+  - "offsets": an immutable dict indicating integer offsets (total number of
+    array elements) from the origin along each dimension for this chunk.
+  - "vars": either an frozenset or None, indicating the subset of Dataset
+    variables included in this chunk. None means that all variables are
+    included.
 
-  ChunkKey is hashable, which makes it suitable for use as a key in Beam
-  pipelines. It also has a handful of convenience methods and operators defined
-  that are useful for building pipelines.
+  Key objects are "deterministically encoded" by Beam, which makes them suitable
+  for use as keys in Beam pipelines, i.e., with beam.GroupByKey. They are also
+  immutable and hashable, which makes them usable as keys in Python
+  dictionaries.
 
   Example usage::
 
-    >>> key = ChunkKey({"x": 0, "y": 10})
+    >>> key = xarray_beam.Key(offsets={'x': 10}, vars={'foo'})
 
-    >>> key["x"]  # ChunkKey works *like* a dict
-    0
+    >>> key
+    xarray_beam.Key(offsets={'x': 10}, vars={'foo'})
 
-    >>> {key: 'foo'}  # but also can be used as a key *in* a dict
-    {ChunkKey({'x': 0, 'y': 10}): 'foo'}
+    >>> key.offsets
+    immutabledict({'x': 10})
 
-    # convert to slices for xarray.Dataset.isel()
-    >>> key.to_slices({'x': 5, 'y': 10})
-    {'x': slice(0, 5, 1), 'y': slice(10, 20, 1)}
+    >>> key.vars
+    frozenset({'foo'})
 
-    >>> key | {'z': 100}  # insert or override offsets
-    ChunkKey({'x': 0, 'y': 10, 'z': 100})
+  To replace some offsets::
 
-    >>> key - {'x'}  # remove dimensions
-    ChunkKey({'y': 10})
+    >>> key.with_offsets(y=0)  # insert
+    xarray_beam.Key(offsets={'x': 10, 'y': 0}, vars={'foo'})
+
+    >>> key.with_offsets(x=20)  # override
+    xarray_beam.Key(offsets={'x': 20}, vars={'foo'})
+
+    >>> key.with_offsets(x=None)  # remove
+    xarray_beam.Key(offsets={}, vars={'foo'})
+
+  To entirely replace offsets or variables::
+
+    >>> key.replace(offsets={'y': 0})
+    xarray_beam.Key(offsets={'y': 0}, vars={'foo'})
+
+    >>> key.replace(vars=None)
+    xarray_beam.Key(offsets={'x': 10}, vars=None)
   """
 
-  def __init__(self, offsets: Mapping[str, int]):
-    self._offsets = offsets
+  # pylint: disable=redefined-builtin
 
-  def to_slices(
+  def __init__(
       self,
-      sizes: Mapping[str, int],
-      base: Optional[Mapping[str, int]] = None,
-  ) -> Dict[str, slice]:
-    """Convert this ChunkKey into slices with an optional base offset.
+      offsets: Optional[Mapping[str, int]] = None,
+      vars: Optional[AbstractSet[str]] = None,
+  ):
+    if offsets is None:
+      offsets = {}
+    if isinstance(vars, str):
+      raise TypeError(f'vars must be a set or None, but is {vars!r}')
+    self.offsets = immutabledict.immutabledict(offsets)
+    self.vars = None if vars is None else frozenset(vars)
 
-    Args:
-      sizes: dimension sizes for the corresponding chunk.
-      base: optional base-offset to subract from this key. This allows for
-        relative indexing, e.g., into a chunk of a larger Dataset.
+  def replace(
+      self,
+      offsets: Union[Mapping[str, int], object] = _DEFAULT,
+      vars: Union[AbstractSet[str], None, object] = _DEFAULT,
+  ) -> 'Key':
+    if offsets is _DEFAULT:
+      offsets = self.offsets
+    if vars is _DEFAULT:
+      vars = self.vars
+    return type(self)(offsets, vars)
 
-    Returns:
-      Slices suitable for indexing with xarray.Dataset.isel().
-
-    Example usage::
-
-      >>> key = ChunkKey({'x': 100})
-      >>> key.to_slices({'x': 10})
-      {'x': slice(100, 110, 1)}
-      >>> key.to_slices({'x': 10}, base={'x': 100})
-      {'x': slice(0, 10, 1)}
-    """
-    base = _default_base(base, keys=self._offsets)
-    slices = {}
-    for k, v in self._offsets.items():
-      offset = v - base[k]
-      size = sizes.get(k)
-      if size is not None:
-        slices[k] = slice(offset, offset + size, 1)
+  def with_offsets(self, **offsets: Optional[int]) -> 'Key':
+    new_offsets = dict(self.offsets)
+    for k, v in offsets.items():
+      if v is None:
+        del new_offsets[k]
       else:
-        if offset != 0:
-          raise ValueError(
-              f'dimension {k} has a non-zero offset {offset} but does not '
-              f'appear in the dict of known sizes: {sizes}'
-          )
-        slices[k] = slice(None)
-    return slices
-
-  def __or__(self, new_offsets: Mapping[str, int]) -> 'ChunkKey':
-    return type(self)({**self._offsets, **new_offsets})
-
-  def __sub__(self, keys: AbstractSet[str]) -> 'ChunkKey':
-    if isinstance(keys, str):
-      # catch the common error of subtracting a string at runtime
-      return NotImplemented
-    extra_keys = [k for k in keys if k not in self._offsets]
-    if extra_keys:
-      raise ValueError(f'Keys {extra_keys} not found in {self}')
-    return type(self)(
-        {k: v for k, v in self._offsets.items() if k not in keys}
-    )
+        new_offsets[k] = v
+    return self.replace(offsets=new_offsets)
 
   def __repr__(self) -> str:
-    return f'{type(self).__name__}({self._offsets})'
-
-  def __getitem__(self, key: str) -> int:
-    return self._offsets[key]
-
-  def __iter__(self) -> Iterator[str]:
-    return iter(self._offsets)
-
-  def __len__(self) -> int:
-    return len(self._offsets)
+    offsets = dict(self.offsets)
+    vars = set(self.vars) if self.vars is not None else None
+    return f'{type(self).__name__}(offsets={offsets}, vars={vars})'
 
   def __hash__(self) -> int:
-    return hash(frozenset(self.items()))
+    return hash((self.offsets, self.vars))
 
-  def __lt__(self, other) -> bool:
-    if not isinstance(other, ChunkKey):
+  def __eq__(self, other) -> bool:
+    if not isinstance(other, Key):
       return NotImplemented
-    if other.keys() != self.keys():
-      raise ValueError('Dimensions must match for comparison between ChunkKey '
-                       f'objects: {self} vs {other}')
-    return sorted(self.items()) < sorted(other.items())
+    return self.offsets == other.offsets and self.vars == other.vars
+
+  def __ne__(self, other) -> bool:
+    return not self == other
 
   # Beam uses these methods (also used for pickling) for "deterministic
   # encoding" of groupby keys
   def __getstate__(self):
-    return sorted(self.items())
+    offsets_state = sorted(self.offsets.items())
+    vars_state = None if self.vars is None else sorted(self.vars)
+    return (offsets_state, vars_state)
 
   def __setstate__(self, state):
-    self._offsets = dict(state)
+    self.__init__(*state)
+
+
+def offsets_to_slices(
+    offsets: Mapping[str, int],
+    sizes: Mapping[str, int],
+    base: Optional[Mapping[str, int]] = None,
+) -> Dict[str, slice]:
+  """Convert offsets into slices with an optional base offset.
+
+  Args:
+    offsets: integer offsets from the origin along each axis.
+    sizes: dimension sizes for the corresponding chunks.
+    base: optional base-offset to subract from this key. This allows for
+      relative indexing, e.g., into a chunk of a larger Dataset.
+
+  Returns:
+    Slices suitable for indexing with xarray.Dataset.isel().
+
+  Example usage::
+
+    >>> offsets_to_slices({'x': 100}, sizes={'x': 10})
+    {'x': slice(100, 110, 1)}
+    >>> offsets_to_slices({'x': 100}, sizes={'x': 10}, base={'x': 100})
+    {'x': slice(0, 10, 1)}
+  """
+  if base is None:
+    base = {}
+  slices = {}
+  for k, v in offsets.items():
+    offset = v - base.get(k, 0)
+    slices[k] = slice(offset, offset + sizes[k], 1)
+  return slices
 
 
 def _chunks_to_offsets(
@@ -166,16 +188,15 @@ def _chunks_to_offsets(
 
 def iter_chunk_keys(
     chunks: Mapping[str, Tuple[int, ...]],
-) -> Iterator[ChunkKey]:
-  """Iterate over the ChunkKey objects corresponding to the given chunks."""
+) -> Iterator[Key]:
+  """Iterate over the Key objects corresponding to the given chunks."""
   all_offsets = _chunks_to_offsets(chunks)
   chunk_indices = [range(len(sizes)) for sizes in chunks.values()]
   for indices in itertools.product(*chunk_indices):
     offsets = {
-        dim: all_offsets[dim][index]
-        for dim, index in zip(chunks, indices)
+        dim: all_offsets[dim][index] for dim, index in zip(chunks, indices)
     }
-    yield ChunkKey(offsets)
+    yield Key(offsets)
 
 
 def compute_offset_index(
@@ -230,15 +251,18 @@ class DatasetToChunks(beam.PTransform):
       self,
       dataset: xarray.Dataset,
       chunks: Optional[Mapping[str, Union[int, Tuple[int, ...]]]] = None,
+      split_vars: bool = False,
       num_threads: Optional[int] = None,
   ):
-    """Initialize ChunksToZarr.
+    """Initialize DatasetToChunks.
 
     Args:
-      dataset: dataset to split into (ChunkKey, xarray.Dataset) pairs.
-      chunks: optional chunking scheme. Required if the dataset is *not*
-        already chunked. If the dataset *is* already chunked with Dask, `chunks`
-        takes precedence over the existing chunks.
+      dataset: dataset to split into (Key, xarray.Dataset) pairs.
+      chunks: optional chunking scheme. Required if the dataset is *not* already
+        chunked. If the dataset *is* already chunked with Dask, `chunks` takes
+        precedence over the existing chunks.
+      split_vars: whether to split the dataset into separate records for each
+        data variables or to keep all data variables together.
       num_threads: optional number of Dataset chunks to load in parallel per
         worker. More threads can increase throughput, but also increases memory
         usage and makes it harder for Beam runners to shard work. Note that each
@@ -252,26 +276,31 @@ class DatasetToChunks(beam.PTransform):
     chunks = normalize_expanded_chunks(chunks, dataset.sizes)
     self.dataset = dataset
     self.chunks = chunks
+    self.split_vars = split_vars
     self.num_threads = num_threads
     self.offset_index = compute_offset_index(_chunks_to_offsets(chunks))
 
-  def _key_to_chunk(self, key):
+  def _key_to_chunks(self, key: Key) -> Iterator[Tuple[Key, xarray.Dataset]]:
     sizes = {
         dim: self.chunks[dim][self.offset_index[dim][offset]]
-        for dim, offset in key.items()
+        for dim, offset in key.offsets.items()
     }
-    slices = key.to_slices(sizes)
+    slices = offsets_to_slices(key.offsets, sizes)
     chunk = self.dataset.isel(slices)
     # Load the data, using a separate thread for each variable
     num_threads = len(self.dataset.data_vars)
     result = chunk.chunk().compute(num_workers=num_threads)
-    return key, result
+    if self.split_vars:
+      for k in result:
+        yield key.replace(vars={k}), result[[k]]
+    else:
+      yield key, result
 
   def expand(self, pcoll):
     return (
         pcoll
         | beam.Create(iter_chunk_keys(self.chunks))
-        | threadmap.ThreadMap(
-            self._key_to_chunk, num_threads=self.num_threads
+        | threadmap.FlatThreadMap(
+            self._key_to_chunks, num_threads=self.num_threads
         )
     )

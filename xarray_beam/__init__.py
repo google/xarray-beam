@@ -15,8 +15,9 @@
 
 # pylint: disable=g-multiple-import
 from xarray_beam._src.core import (
-    ChunkKey,
+    Key,
     DatasetToChunks,
+    offsets_to_slices,
 )
 from xarray_beam._src.combiners import (
     Mean,
@@ -24,12 +25,20 @@ from xarray_beam._src.combiners import (
 )
 from xarray_beam._src.rechunk import (
     ConsolidateChunks,
+    ConsolidateVariables,
     SplitChunks,
+    SplitVariables,
     Rechunk,
+    consolidate_chunks,
+    consolidate_variables,
+    consolidate_fully,
+    split_chunks,
+    split_variables,
+    in_memory_rechunk,
 )
 from xarray_beam._src.zarr import (
     ChunksToZarr,
     DatasetToZarr,
 )
 
-__version__ = '0.0.1'
+__version__ = '0.2.0'

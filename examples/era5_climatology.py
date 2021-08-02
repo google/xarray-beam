@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Calculate climatology for the Pangeo ERA5 surface dataset."""
+from typing import Tuple
+
 from absl import app
 from absl import flags
 import apache_beam as beam
 import numpy as np
 import xarray
-import xarray_beam
+import xarray_beam as xbeam
 
 
 INPUT_PATH = flags.DEFINE_string('input_path', None, help='Input Zarr path')
@@ -29,10 +31,13 @@ FLAGS = flags.FLAGS
 # pylint: disable=expression-not-assigned
 
 
-def rekey_chunk_on_month_hour(key, dataset):
+def rekey_chunk_on_month_hour(
+    key: xbeam.Key, dataset: xarray.Dataset,
+) -> Tuple[xbeam.Key, xarray.Dataset]:
+  """Replace the 'time' dimension with 'month'/'hour'."""
   month = dataset.time.dt.month.item()
   hour = dataset.time.dt.hour.item()
-  new_key = key - {'time'} | {'month': month - 1, 'hour': hour}
+  new_key = key.with_offsets(time=None, month=month - 1, hour=hour)
   new_dataset = (
       dataset
       .squeeze('time', drop=True)
@@ -52,11 +57,12 @@ def main(argv):
   # pipeline. We don't really need to supply a template here because the outputs
   # are small (the template argument in ChunksToZarr is optional), but it makes
   # the pipeline slightly more efficient.
+  max_month = source_dataset.time.dt.month.max().item()  # normally 12
   template = (
       source_dataset
       .isel(time=0, drop=True)
       .pipe(xarray.zeros_like)  # don't load even time=0 into memory
-      .expand_dims(month=np.arange(12)+1, hour=np.arange(24))
+      .expand_dims(month=np.arange(1, max_month + 1), hour=np.arange(24))
       .chunk({'hour': 1, 'month': 1})  # make lazy with dask
       .pipe(xarray.zeros_like)  # compress the dask graph
   )
@@ -64,12 +70,11 @@ def main(argv):
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
     (
         root
-        | xarray_beam.DatasetToChunks(source_dataset, {'time': 31})
-        | xarray_beam.SplitChunks({'time': 1})
+        | xbeam.DatasetToChunks(source_dataset, {'time': 31})
+        | xbeam.SplitChunks({'time': 1})
         | beam.MapTuple(rekey_chunk_on_month_hour)
-        | xarray_beam.Mean.PerKey(dtype=np.float64)  # avoid overflow
-        | beam.MapTuple(lambda k, v: (k, v.astype(np.float32)))
-        | xarray_beam.ChunksToZarr(OUTPUT_PATH.value, template)
+        | xbeam.Mean.PerKey()
+        | xbeam.ChunksToZarr(OUTPUT_PATH.value, template)
     )
 
 

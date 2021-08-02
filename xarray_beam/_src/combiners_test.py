@@ -16,7 +16,7 @@
 from absl.testing import absltest
 import numpy as np
 import xarray
-import xarray_beam
+import xarray_beam as xbeam
 from xarray_beam._src import test_util
 
 
@@ -37,25 +37,25 @@ class MeanTest(test_util.TestCase):
 
     with self.subTest('skipna-default'):
       expected = dataset.mean('y', skipna=True)
-      actual, = inputs_y | xarray_beam.Mean.Globally()
+      actual, = inputs_y | xbeam.Mean.Globally()
       xarray.testing.assert_allclose(expected, actual)
 
     with self.subTest('skipna=True'):
       expected = dataset.mean('y', skipna=True)
-      actual, = inputs_y | xarray_beam.Mean.Globally(skipna=True)
+      actual, = inputs_y | xbeam.Mean.Globally(skipna=True)
       xarray.testing.assert_allclose(expected, actual)
 
       expected = dataset.mean('x', skipna=True)
-      actual, = inputs_x | xarray_beam.Mean.Globally(skipna=True)
+      actual, = inputs_x | xbeam.Mean.Globally(skipna=True)
       xarray.testing.assert_allclose(expected, actual)
 
     with self.subTest('skipna=False', skipna=False):
       expected = dataset.mean('y', skipna=False)
-      actual, = inputs_y | xarray_beam.Mean.Globally(skipna=False)
+      actual, = inputs_y | xbeam.Mean.Globally(skipna=False)
       xarray.testing.assert_allclose(expected, actual)
 
       expected = dataset.mean('x', skipna=False)
-      actual, = inputs_x | xarray_beam.Mean.Globally(skipna=False)
+      actual, = inputs_x | xbeam.Mean.Globally(skipna=False)
       xarray.testing.assert_allclose(expected, actual)
 
   def test_per_key(self):
@@ -69,7 +69,7 @@ class MeanTest(test_util.TestCase):
         (0, xarray.Dataset({'x': 1.5})),
         (1, xarray.Dataset({'x': 3.5})),
     ]
-    actual = inputs | xarray_beam.Mean.PerKey()
+    actual = inputs | xbeam.Mean.PerKey()
     self.assertAllCloseChunks(actual, expected)
 
 

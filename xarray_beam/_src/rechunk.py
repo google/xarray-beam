@@ -15,10 +15,10 @@
 import collections
 import itertools
 import logging
+import textwrap
 from typing import (
     Any, Dict, Iterable, Iterator, List, Optional, Mapping, Tuple, Union
 )
-import textwrap
 
 import apache_beam as beam
 import dataclasses
@@ -78,28 +78,11 @@ def rechunking_plan(
   return [dict(zip(dim_sizes.keys(), shapes)) for shapes in plan_shapes]
 
 
-def _round_chunk_key(
-    chunk_key: core.ChunkKey,
-    target_chunks: Mapping[str, int],
-) -> core.ChunkKey:
-  """Round down a chunk-key to offsets corresponding to new chunks."""
-  new_offsets = {}
-  for dim, offset in chunk_key.items():
-    chunk_size = target_chunks.get(dim)
-    if chunk_size is None:
-      new_offsets[dim] = offset
-    elif chunk_size == -1:
-      new_offsets[dim] = 0
-    else:
-      new_offsets[dim] = chunk_size * (offset // chunk_size)
-  return core.ChunkKey(new_offsets)
-
-
 def consolidate_chunks(
-    inputs: Iterable[Tuple[core.ChunkKey, xarray.Dataset]],
+    inputs: Iterable[Tuple[core.Key, xarray.Dataset]],
     combine_kwargs: Optional[Mapping[str, Any]] = None,
-) -> Tuple[core.ChunkKey, xarray.Dataset]:
-  """Combine chunks into a single (ChunkKey, Dataset) pair."""
+) -> Iterable[Tuple[core.Key, xarray.Dataset]]:
+  """Consolidate chunks across offsets into (Key, Dataset) pairs."""
   inputs = list(inputs)
   keys = [key for key, _ in inputs]
   if len(set(keys)) < len(keys):
@@ -107,79 +90,169 @@ def consolidate_chunks(
 
   # Reconstruct shared offsets along each dimension by inspecting chunk keys.
   unique_offsets = collections.defaultdict(set)
-  for key in keys:
-    for dim, offset in key.items():
-      unique_offsets[dim].add(offset)
-  offsets = {k: sorted(v) for k, v in unique_offsets.items()}
-  combined_key = core.ChunkKey({k: v[0] for k, v in offsets.items()})
-
-  # Consolidate inputs in a single xarray.Dataset.
-  # `inputs` is a flat list like `[(k_00, ds_00), (k_01, ds_01), ...]` where
-  # `k_ij` is a ChunkKey giving the (multi-dimensional) index of `ds_ij` in a
-  # virtual larger Dataset.
-  # Now we want to actually concatenate along all those dimensions, e.g., the
-  # equivalent of building a large matrix out of sub-matrices:
-  #       ⌈[x_00 x_01] ...⌉   ⌈x_00 x_01 ...⌉
-  #   X = |[x_10 x_11] ...| = |x_10 x_11 ...|
-  #       |[x_20 x_21] ...|   |x_20 x_21 ...|
-  #       ⌊    ...     ...⌋   ⌊ ...  ... ...⌋
-  # In NumPy, this would be done with `np.block()`.
-  offset_index = core.compute_offset_index(offsets)
-  shape = [len(v) for v in offsets.values()]
-  if np.prod(shape) != len(inputs):
-    raise ValueError('some expected chunk keys are missing')
-  nested_array = np.empty(dtype=object, shape=shape)
+  inputs_by_vars = collections.defaultdict(list)
   for key, chunk in inputs:
-    nested_key = tuple(offset_index[dim][key[dim]] for dim in offsets)
-    assert nested_array[nested_key] is None
-    nested_array[nested_key] = chunk
+    for dim, offset in key.offsets.items():
+      unique_offsets[dim].add(offset)
+    inputs_by_vars[key.vars].append((key, chunk))
 
+  offsets = {k: sorted(v) for k, v in unique_offsets.items()}
+  combined_offsets = {k: v[0] for k, v in offsets.items()}
+
+  for cur_vars, cur_inputs in inputs_by_vars.items():
+
+    combined_key = core.Key(combined_offsets, cur_vars)
+
+    # Consolidate inputs in a single xarray.Dataset.
+    # `inputs` is a flat list like `[(k_00, ds_00), (k_01, ds_01), ...]` where
+    # `k_ij` is a Key giving the (multi-dimensional) index of `ds_ij` in a
+    # virtual larger Dataset.
+    # Now we want to actually concatenate along all those dimensions, e.g., the
+    # equivalent of building a large matrix out of sub-matrices:
+    #       ⌈[x_00 x_01] ...⌉   ⌈x_00 x_01 ...⌉
+    #   X = |[x_10 x_11] ...| = |x_10 x_11 ...|
+    #       |[x_20 x_21] ...|   |x_20 x_21 ...|
+    #       ⌊    ...     ...⌋   ⌊ ...  ... ...⌋
+    # In NumPy, this would be done with `np.block()`.
+    offset_index = core.compute_offset_index(offsets)
+    shape = [len(v) for v in offsets.values()]
+    if np.prod(shape) != len(cur_inputs):
+      raise ValueError(f'some expected chunks are missing for vars={cur_vars}')
+    nested_array = np.empty(dtype=object, shape=shape)
+    for key, chunk in cur_inputs:
+      nested_key = tuple(offset_index[dim][key.offsets[dim]] for dim in offsets)
+      assert nested_array[nested_key] is None
+      nested_array[nested_key] = chunk
+
+    kwargs = dict(
+        data_vars='minimal',
+        coords='minimal',
+        join='exact',
+        combine_attrs='override',
+    )
+    if combine_kwargs is not None:
+      kwargs.update(combine_kwargs)
+
+    try:
+      combined_dataset = xarray.combine_nested(
+          nested_array.tolist(),
+          concat_dim=list(offsets),
+          **kwargs
+      )
+    except (ValueError, xarray.MergeError) as original_error:
+      summaries = []
+      for axis, dim in enumerate(offsets):
+        repr_string = '\n'.join(
+            repr(ds) for ds in nested_array[(0,) * axis + (slice(2),)].tolist()
+        )
+        if nested_array.shape[axis] > 2:
+          repr_string += '\n...'
+        repr_string = textwrap.indent(repr_string, prefix='  ')
+        summaries.append(
+            f'Leading datasets along dimension {dim!r}:\n{repr_string}'
+        )
+      summaries_str = '\n'.join(summaries)
+      raise ValueError(
+          f'combining nested dataset chunks for vars={cur_vars} with '
+          f'offsets={offsets} failed.\n' + summaries_str
+      ) from original_error
+
+    yield combined_key, combined_dataset
+
+
+def consolidate_variables(
+    inputs: Iterable[Tuple[core.Key, xarray.Dataset]],
+    merge_kwargs: Optional[Mapping[str, Any]] = None,
+) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+  """Consolidate chunks across distinct variables into (Key, Dataset) pairs."""
   kwargs = dict(
-      data_vars='minimal',
-      coords='minimal',
+      compat='equals',
       join='exact',
       combine_attrs='override',
   )
-  if combine_kwargs is not None:
-    kwargs.update(combine_kwargs)
+  if merge_kwargs is not None:
+    kwargs.update(merge_kwargs)
 
-  try:
-    combined_dataset = xarray.combine_nested(
-        nested_array.tolist(),
-        concat_dim=list(offsets),
-        **kwargs
-    )
-  except (ValueError, xarray.MergeError) as original_error:
-    summaries = []
-    for axis, dim in enumerate(offsets):
-      repr_string = '\n'.join(
-          repr(ds) for ds in nested_array[(0,) * axis + (slice(2),)].tolist()
+  chunks_by_offsets = collections.defaultdict(list)
+  for key, chunk in inputs:
+    chunks_by_offsets[key.offsets].append(chunk)
+
+  for offsets, chunks in chunks_by_offsets.items():
+    all_vars = [set(chunk.keys()) for chunk in chunks]
+    new_vars = set.union(*all_vars)
+    if len(new_vars) != sum(map(len, all_vars)):
+      raise ValueError(
+          f'cannot merge chunks with overlapping variables: {all_vars}'
       )
-      if nested_array.shape[axis] > 2:
+    key = core.Key(offsets, new_vars)
+
+    try:
+      dataset = xarray.merge(chunks, **kwargs)
+    except (ValueError, xarray.MergeError) as original_error:
+      repr_string = '\n'.join(repr(ds) for ds in chunks[:2])
+      if len(chunks) > 2:
         repr_string += '\n...'
       repr_string = textwrap.indent(repr_string, prefix='  ')
-      summaries.append(
-          f'Leading datasets along dimension {dim!r}:\n{repr_string}'
-      )
-    summaries_str = '\n'.join(summaries)
-    raise ValueError(
-        f'combining nested dataset chunks with offsets {offsets} failed.\n'
-        + summaries_str
-    ) from original_error
-  return combined_key, combined_dataset
+      raise ValueError(
+          f'merging dataset chunks with variables {all_vars} failed.\n'
+          + repr_string
+      ) from original_error
+    yield key, dataset
+
+
+def consolidate_fully(
+    inputs: Iterable[Tuple[core.Key, xarray.Dataset]],
+    *,
+    merge_kwargs: Optional[Mapping[str, Any]] = None,
+    combine_kwargs: Optional[Mapping[str, Any]] = None,
+) -> Tuple[core.Key, xarray.Dataset]:
+  """Consolidate chunks via merge/concat into a single (Key, Dataset) pair."""
+  concatenated = consolidate_chunks(inputs, combine_kwargs)
+  merged = list(consolidate_variables(concatenated, merge_kwargs))
+  assert len(merged) == 1, [key for key, _ in merged]
+  (key, dataset), = merged
+  return key, dataset
+
+
+class _ConsolidateBase(beam.PTransform):
+
+  def expand(self, pcoll):
+    return (
+        pcoll
+        | 'PrependTempKey' >> beam.MapTuple(self._prepend_chunk_key)
+        | 'GroupByTempKeys' >> beam.GroupByKey()
+        | 'Consolidate' >> beam.MapTuple(self._consolidate_chunks)
+    )
+
+
+def _round_chunk_key(
+    key: core.Key,
+    target_chunks: Mapping[str, int],
+) -> core.Key:
+  """Round down a chunk-key to offsets corresponding to new chunks."""
+  new_offsets = {}
+  for dim, offset in key.offsets.items():
+    chunk_size = target_chunks.get(dim)
+    if chunk_size is None:
+      new_offsets[dim] = offset
+    elif chunk_size == -1:
+      new_offsets[dim] = 0
+    else:
+      new_offsets[dim] = chunk_size * (offset // chunk_size)
+  return key.replace(new_offsets)
 
 
 @dataclasses.dataclass
 class ConsolidateChunks(beam.PTransform):
-  """Consolidate existing chunks into bigger chunks."""
+  """Consolidate existing chunks across offsets into bigger chunks."""
   target_chunks: Mapping[str, int]
 
   def _prepend_chunk_key(self, key, chunk):
-    rechunk_key = _round_chunk_key(key, self.target_chunks)
-    return rechunk_key, (key, chunk)
+    rounded_key = _round_chunk_key(key, self.target_chunks)
+    return rounded_key, (key, chunk)
 
-  def _consolidate_chunks(self, key, inputs):
-    consolidated_key, dataset = consolidate_chunks(inputs)
+  def _consolidate(self, key, inputs):
+    (consolidated_key, dataset), = consolidate_chunks(inputs)
     assert key == consolidated_key, (key, consolidated_key)
     return consolidated_key, dataset
 
@@ -188,7 +261,35 @@ class ConsolidateChunks(beam.PTransform):
         pcoll
         | 'PrependTempKey' >> beam.MapTuple(self._prepend_chunk_key)
         | 'GroupByTempKeys' >> beam.GroupByKey()
-        | 'Consolidate' >> beam.MapTuple(self._consolidate_chunks)
+        | 'Consolidate' >> beam.MapTuple(self._consolidate)
+    )
+
+
+class ConsolidateVariables(beam.PTransform):
+  """Consolidate existing chunks across variables into bigger chunks."""
+  # TODO(shoyer): add support for partial consolidation into explicit sets
+  # of variables.
+
+  def _prepend_chunk_key(self, key, chunk):
+    return key.replace(vars=None), (key, chunk)
+
+  def _consolidate(self, key, inputs):
+    (consolidated_key, dataset), = consolidate_variables(inputs)
+    assert key.offsets == consolidated_key.offsets, (key, consolidated_key)
+    assert key.vars is None
+    # TODO(shoyer): consider carefully whether it is better to return key or
+    # consolidated_key. They are both valid in the xarray-beam data model -- the
+    # difference is whether vars=None or is an explicit set of variables.
+    # For now, conservatively return the version of key with vars=None so
+    # users don't rely on it.
+    return key, dataset
+
+  def expand(self, pcoll):
+    return (
+        pcoll
+        | 'PrependTempKey' >> beam.MapTuple(self._prepend_chunk_key)
+        | 'GroupByTempKeys' >> beam.GroupByKey()
+        | 'Consolidate' >> beam.MapTuple(self._consolidate)
     )
 
 
@@ -217,32 +318,32 @@ def _split_chunk_bounds(
 
 
 def split_chunks(
-    key: core.ChunkKey,
+    key: core.Key,
     dataset: xarray.Dataset,
     target_chunks: Mapping[str, int],
-) -> Iterator[Tuple[core.ChunkKey, xarray.Dataset]]:
-  """Split a single (ChunkKey, xarray.Dataset) pair into many chunks."""
+) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+  """Split a single (Key, xarray.Dataset) pair into many chunks."""
   # This function splits consolidated arrays into blocks of new sizes, e.g.,
   #       ⌈x_00 x_01 ...⌉   ⌈⌈x_00⌉ ⌈x_01⌉ ...⌉
   #   X = |x_10 x_11 ...| = ||x_10| |x_11| ...|
   #       |x_20 x_21 ...|   |⌊x_20⌋ ⌊x_21⌋ ...|
   #       ⌊ ... ...  ...⌋   ⌊  ...    ...  ...⌋
-  # and emits them as (ChunkKey, xarray.Dataset) pairs.
+  # and emits them as (Key, xarray.Dataset) pairs.
   all_bounds = []
   for dim, chunk_size in target_chunks.items():
-    start = key.get(dim, 0)
+    start = key.offsets.get(dim, 0)
     stop = start + dataset.sizes[dim]
     all_bounds.append(_split_chunk_bounds(start, stop, chunk_size))
 
   for bounds in itertools.product(*all_bounds):
-    offsets = dict(key)
+    new_offsets = dict(key.offsets)
     slices = {}
     for dim, (start, stop) in zip(target_chunks, bounds):
-      base = key.get(dim, 0)
-      offsets[dim] = start
+      base = key.offsets.get(dim, 0)
+      new_offsets[dim] = start
       slices[dim] = slice(start - base, stop - base)
 
-    new_key = core.ChunkKey(offsets)
+    new_key = key.replace(new_offsets)
     new_chunk = dataset.isel(slices)
     yield new_key, new_chunk
 
@@ -259,13 +360,33 @@ class SplitChunks(beam.PTransform):
     return pcoll | beam.FlatMapTuple(self._split_chunks)
 
 
+def split_variables(
+    key: core.Key,
+    dataset: xarray.Dataset,
+) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+  """Split a single (Key, xarray.Dataset) pair into separate variables."""
+  # TODO(shoyer): add support for partial splitting, into explicitly provided
+  # sets of variables
+  for var_name in dataset:
+    yield key.replace(vars={var_name}), dataset[[var_name]]
+
+
+@dataclasses.dataclass
+class SplitVariables(beam.PTransform):
+  """Split existing chunks into a separate chunk per data variable."""
+
+  def expand(self, pcoll):
+    return pcoll | beam.FlatMapTuple(split_variables)
+
+
 def in_memory_rechunk(
-    inputs: List[Tuple[core.ChunkKey, xarray.Dataset]],
+    inputs: List[Tuple[core.Key, xarray.Dataset]],
     target_chunks: Mapping[str, int],
-) -> Iterator[Tuple[core.ChunkKey, xarray.Dataset]]:
-  """Rechunk in-memory pairs of (ChunkKey, xarray.Dataset)."""
-  key, dataset = consolidate_chunks(inputs)
-  yield from split_chunks(key, dataset, target_chunks)
+) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+  """Rechunk in-memory pairs of (Key, xarray.Dataset)."""
+  consolidated = consolidate_chunks(inputs)
+  for key, dataset in consolidated:
+    yield from split_chunks(key, dataset, target_chunks)
 
 
 @dataclasses.dataclass

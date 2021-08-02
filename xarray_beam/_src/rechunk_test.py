@@ -19,7 +19,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import numpy as np
 import xarray
-import xarray_beam
+import xarray_beam as xbeam
 from xarray_beam._src import rechunk
 from xarray_beam._src import test_util
 
@@ -89,106 +89,164 @@ class RechunkTest(test_util.TestCase):
 
   def test_consolidate_and_split_chunks(self):
     consolidated = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(0, 10))})),
-        (xarray_beam.ChunkKey({'x': 10}),
+        (xbeam.Key({'x': 10}),
          xarray.Dataset({'foo': ('x', np.arange(10, 20))})),
     ]
     split = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
-        (xarray_beam.ChunkKey({'x': 5}),
+        (xbeam.Key({'x': 5}),
          xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
-        (xarray_beam.ChunkKey({'x': 10}),
+        (xbeam.Key({'x': 10}),
          xarray.Dataset({'foo': ('x', np.arange(10, 15))})),
-        (xarray_beam.ChunkKey({'x': 15}),
+        (xbeam.Key({'x': 15}),
          xarray.Dataset({'foo': ('x', np.arange(15, 20))})),
     ]
     with self.subTest('ConsolidateChunks'):
-      actual = split | xarray_beam.ConsolidateChunks({'x': 10})
+      actual = split | xbeam.ConsolidateChunks({'x': 10})
       self.assertIdenticalChunks(actual, consolidated)
     with self.subTest('SplitChunks'):
-      actual = consolidated | xarray_beam.SplitChunks({'x': 5})
+      actual = consolidated | xbeam.SplitChunks({'x': 5})
       self.assertIdenticalChunks(actual, split)
 
   def test_consolidate_and_split_uneven_chunks(self):
     consolidated = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(10))})),
     ]
     split = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(0, 4))})),
-        (xarray_beam.ChunkKey({'x': 4}),
+        (xbeam.Key({'x': 4}),
          xarray.Dataset({'foo': ('x', np.arange(4, 8))})),
-        (xarray_beam.ChunkKey({'x': 8}),
+        (xbeam.Key({'x': 8}),
          xarray.Dataset({'foo': ('x', np.arange(8, 10))})),
     ]
     with self.subTest('ConsolidateChunks'):
-      actual = split | xarray_beam.ConsolidateChunks({'x': 10})
+      actual = split | xbeam.ConsolidateChunks({'x': 10})
       self.assertIdenticalChunks(actual, consolidated)
     with self.subTest('SplitChunks'):
-      actual = consolidated | xarray_beam.SplitChunks({'x': 4})
+      actual = consolidated | xbeam.SplitChunks({'x': 4})
       self.assertIdenticalChunks(actual, split)
 
   def test_consolidate_and_split_only_some_dims(self):
     chunk_data = np.arange(0, 10).reshape(2, 5)
     split = [
-        (xarray_beam.ChunkKey({'x': 0, 'y': 0}),
+        (xbeam.Key({'x': 0, 'y': 0}),
          xarray.Dataset({'foo': (('x', 'y'), chunk_data)})),
-        (xarray_beam.ChunkKey({'x': 0, 'y': 5}),
+        (xbeam.Key({'x': 0, 'y': 5}),
          xarray.Dataset({'foo': (('x', 'y'), chunk_data + 10)})),
     ]
     all_data = np.concatenate([chunk_data, chunk_data + 10], axis=1)
     consolidated = [
-        (xarray_beam.ChunkKey({'x': 0, 'y': 0}),
+        (xbeam.Key({'x': 0, 'y': 0}),
          xarray.Dataset({'foo': (('x', 'y'), all_data)})),
     ]
     with self.subTest('ConsolidateChunks'):
-      actual = split | xarray_beam.ConsolidateChunks({'y': 10})
+      actual = split | xbeam.ConsolidateChunks({'y': 10})
       self.assertIdenticalChunks(actual, consolidated)
     with self.subTest('SplitChunks'):
-      actual = consolidated | xarray_beam.SplitChunks({'y': 5})
+      actual = consolidated | xbeam.SplitChunks({'y': 5})
+      self.assertIdenticalChunks(actual, split)
+
+  def test_consolidate_and_split_with_separate_vars(self):
+    consolidated = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 10))})),
+        (xbeam.Key({'x': 0}, {'bar'}),
+         xarray.Dataset({'bar': ('x', np.arange(10, 20))})),
+    ]
+    split = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 5}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+        (xbeam.Key({'x': 0}, {'bar'}),
+         xarray.Dataset({'bar': ('x', np.arange(10, 15))})),
+        (xbeam.Key({'x': 5}, {'bar'}),
+         xarray.Dataset({'bar': ('x', np.arange(15, 20))})),
+    ]
+    with self.subTest('ConsolidateChunks'):
+      actual = split | xbeam.ConsolidateChunks({'x': 10})
+      self.assertIdenticalChunks(actual, consolidated)
+    with self.subTest('SplitChunks'):
+      actual = consolidated | xbeam.SplitChunks({'x': 5})
+      self.assertIdenticalChunks(actual, split)
+
+  def test_consolidate_and_split_variables_only(self):
+    consolidated = [
+        (
+            xbeam.Key({'x': 0}, vars=None),
+            xarray.Dataset({
+                'foo': ('x', np.arange(0, 5)),
+                'bar': ('x', np.arange(10, 15)),
+            }),
+        ),
+        (
+            xbeam.Key({'x': 5}, vars=None),
+            xarray.Dataset({
+                'foo': ('x', np.arange(5, 10)),
+                'bar': ('x', np.arange(15, 20)),
+            }),
+        ),
+    ]
+    split = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 0}, {'bar'}),
+         xarray.Dataset({'bar': ('x', np.arange(10, 15))})),
+        (xbeam.Key({'x': 5}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+        (xbeam.Key({'x': 5}, {'bar'}),
+         xarray.Dataset({'bar': ('x', np.arange(15, 20))})),
+    ]
+    with self.subTest('ConsolidateVariables'):
+      actual = split | xbeam.ConsolidateVariables()
+      self.assertIdenticalChunks(actual, consolidated)
+    with self.subTest('SplitVariables'):
+      actual = consolidated | xbeam.SplitVariables()
       self.assertIdenticalChunks(actual, split)
 
   def test_consolidate_with_minus_one_chunks(self):
     inputs = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(0, 10))})),
-        (xarray_beam.ChunkKey({'x': 10}),
+        (xbeam.Key({'x': 10}),
          xarray.Dataset({'foo': ('x', np.arange(10, 20))})),
     ]
     expected = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(20))})),
     ]
-    actual = inputs | xarray_beam.ConsolidateChunks({'x': -1})
+    actual = inputs | xbeam.ConsolidateChunks({'x': -1})
     self.assertIdenticalChunks(actual, expected)
 
   def test_consolidate_with_unchunked_vars(self):
     inputs = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(0, 10)), 'bar': 1})),
-        (xarray_beam.ChunkKey({'x': 10}),
+        (xbeam.Key({'x': 10}),
          xarray.Dataset({'foo': ('x', np.arange(10, 20)), 'bar': 1})),
     ]
     expected = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(20)), 'bar': 1})),
     ]
-    actual = inputs | xarray_beam.ConsolidateChunks({'x': -1})
+    actual = inputs | xbeam.ConsolidateChunks({'x': -1})
     self.assertIdenticalChunks(actual, expected)
 
     inconsistent_inputs = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          xarray.Dataset({'foo': ('x', np.arange(0, 10)), 'bar': 1})),
-        (xarray_beam.ChunkKey({'x': 10}),
+        (xbeam.Key({'x': 10}),
          xarray.Dataset({'foo': ('x', np.arange(10, 20)), 'bar': 2})),
     ]
     with self.assertRaisesRegex(
         ValueError,
         re.escape(textwrap.dedent("""
-            combining nested dataset chunks with offsets {'x': [0, 10]} failed.
+            combining nested dataset chunks for vars=None with offsets={'x': [0, 10]} failed.
             Leading datasets along dimension 'x':
               <xarray.Dataset>
               Dimensions:  (x: 10)
@@ -204,7 +262,65 @@ class RechunkTest(test_util.TestCase):
                   bar      int64 2
         """).strip())
     ):
-      inconsistent_inputs | xarray_beam.ConsolidateChunks({'x': -1})
+      inconsistent_inputs | xbeam.ConsolidateChunks({'x': -1})
+
+  def test_consolidate_chunks_missing_variables(self):
+    inputs = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 5}, {'bar'}),
+         xarray.Dataset({'bar': ('x', np.arange(15, 20))})),
+    ]
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape("some expected chunks are missing for vars=frozenset({'foo'}")
+    ):
+      list(xbeam.consolidate_chunks(inputs, {'x': -1}))
+
+  def test_consolidate_variables_overlapping_variables(self):
+    inputs = [
+        (
+            xbeam.Key({'x': 0}, vars={'foo'}),
+            xarray.Dataset({'foo': ('x', [1, 2])})),
+        (
+            xbeam.Key({'x': 0}, vars={'foo', 'bar'}),
+            xarray.Dataset({'foo': ('x', [3, 4]), 'bar': ('x', [5, 6])}),
+        ),
+    ]
+    with self.assertRaisesRegex(
+        ValueError,
+        "cannot merge chunks with overlapping variables: "
+    ):
+      inputs | xbeam.ConsolidateVariables()
+
+  def test_consolidate_variables_merge_fails(self):
+    inputs = [
+        (
+            xbeam.Key({'x': 0}, vars={'foo'}),
+            xarray.Dataset({'foo': ('x', [1, 2])}),
+        ),
+        (
+            xbeam.Key({'x': 0}, vars={'bar'}),
+            xarray.Dataset({'bar': ('x', [3, 4, 5])}),
+        ),
+    ]
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape(textwrap.dedent("""
+            merging dataset chunks with variables [{'foo'}, {'bar'}] failed.
+              <xarray.Dataset>
+              Dimensions:  (x: 2)
+              Dimensions without coordinates: x
+              Data variables:
+                  foo      (x) int64 1 2
+              <xarray.Dataset>
+              Dimensions:  (x: 3)
+              Dimensions without coordinates: x
+              Data variables:
+                  bar      (x) int64 3 4 5
+        """).strip())
+    ):
+      inputs | xbeam.ConsolidateVariables()
 
   @parameterized.parameters(
       dict(start=0, stop=20, multiple=-1, expected=[(0, 20)]),
@@ -228,40 +344,54 @@ class RechunkTest(test_util.TestCase):
 
   def test_split_uneven_chunks(self):
     inputs = [
-        (xarray_beam.ChunkKey({'x': 0}),
-         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
-        (xarray_beam.ChunkKey({'x': 5}),
-         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+        (xbeam.Key({'x': 0}), xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 5}), xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
     ]
     expected = [
-        (xarray_beam.ChunkKey({'x': 0}),
-         xarray.Dataset({'foo': ('x', np.arange(0, 3))})),
-        (xarray_beam.ChunkKey({'x': 3}),
-         xarray.Dataset({'foo': ('x', np.arange(3, 5))})),
-        (xarray_beam.ChunkKey({'x': 5}),
-         xarray.Dataset({'foo': ('x', np.arange(5, 6))})),
-        (xarray_beam.ChunkKey({'x': 6}),
-         xarray.Dataset({'foo': ('x', np.arange(6, 9))})),
-        (xarray_beam.ChunkKey({'x': 9}),
-         xarray.Dataset({'foo': ('x', np.arange(9, 10))})),
+        (xbeam.Key({'x': 0}), xarray.Dataset({'foo': ('x', np.arange(0, 3))})),
+        (xbeam.Key({'x': 3}), xarray.Dataset({'foo': ('x', np.arange(3, 5))})),
+        (xbeam.Key({'x': 5}), xarray.Dataset({'foo': ('x', np.arange(5, 6))})),
+        (xbeam.Key({'x': 6}), xarray.Dataset({'foo': ('x', np.arange(6, 9))})),
+        (xbeam.Key({'x': 9}), xarray.Dataset({'foo': ('x', np.arange(9, 10))})),
     ]
-    actual = inputs | xarray_beam.SplitChunks({'x': 3})
+    actual = inputs | xbeam.SplitChunks({'x': 3})
     self.assertIdenticalChunks(actual, expected)
+
+  def test_consolidate_fully(self):
+    inputs = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 0}, {'bar'}),
+         xarray.Dataset({'bar': ('x', np.arange(10, 15))})),
+        (xbeam.Key({'x': 5}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+        (xbeam.Key({'x': 5}, {'bar'}),
+         xarray.Dataset({'bar': ('x', np.arange(15, 20))})),
+    ]
+    expected = (
+        xbeam.Key({'x': 0}, vars={'foo', 'bar'}),
+        xarray.Dataset({
+            'foo': ('x', np.arange(0, 10)),
+            'bar': ('x', np.arange(10, 20)),
+        }),
+    )
+    actual = xbeam.consolidate_fully(inputs)
+    self.assertIdenticalChunks([actual], [expected])
 
   def test_in_memory_rechunk_success(self):
     inputs = [
-        (xarray_beam.ChunkKey({'x': 100, 'y': 300}),
+        (xbeam.Key({'x': 100, 'y': 300}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[1, 2, 3]]))})),
-        (xarray_beam.ChunkKey({'x': 101, 'y': 300}),
+        (xbeam.Key({'x': 101, 'y': 300}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[4, 5, 6]]))})),
     ]
     target_chunks = {'x': 2, 'y': 1}
     expected = [
-        (xarray_beam.ChunkKey({'x': 100, 'y': 300}),
+        (xbeam.Key({'x': 100, 'y': 300}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[1], [4]]))})),
-        (xarray_beam.ChunkKey({'x': 100, 'y': 301}),
+        (xbeam.Key({'x': 100, 'y': 301}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[2], [5]]))})),
-        (xarray_beam.ChunkKey({'x': 100, 'y': 302}),
+        (xbeam.Key({'x': 100, 'y': 302}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[3], [6]]))})),
     ]
     actual = list(
@@ -272,8 +402,8 @@ class RechunkTest(test_util.TestCase):
   def test_in_memory_rechunk_not_unique(self):
     ds_zeros = xarray.Dataset({'foo': ('x', [0])})
     inputs = [
-        (xarray_beam.ChunkKey({'x': 0}), ds_zeros),
-        (xarray_beam.ChunkKey({'x': 0}), ds_zeros),
+        (xbeam.Key({'x': 0}), ds_zeros),
+        (xbeam.Key({'x': 0}), ds_zeros),
     ]
     target_chunks = {'x': 2}
     with self.assertRaisesRegex(ValueError, 'chunk keys are not unique'):
@@ -282,38 +412,38 @@ class RechunkTest(test_util.TestCase):
   def test_in_memory_rechunk_missing_keys(self):
     ds_zeros = xarray.Dataset({'foo': (('x', 'y'), [[0]])})
     inputs = [
-        (xarray_beam.ChunkKey({'x': 0, 'y': 0}), ds_zeros),
-        (xarray_beam.ChunkKey({'x': 1, 'y': 1}), ds_zeros),
+        (xbeam.Key({'x': 0, 'y': 0}), ds_zeros),
+        (xbeam.Key({'x': 1, 'y': 1}), ds_zeros),
     ]
     target_chunks = {'x': 2, 'y': 2}
     with self.assertRaisesRegex(
-        ValueError, 'some expected chunk keys are missing',
+        ValueError, 'some expected chunks are missing for vars=None',
     ):
       list(rechunk.in_memory_rechunk(inputs, target_chunks))
 
   def test_rechunk_stage(self):
     inputs = [
-        (xarray_beam.ChunkKey({'x': 100, 'y': 300}),
+        (xbeam.Key({'x': 100, 'y': 300}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[1, 2, 3]]))})),
-        (xarray_beam.ChunkKey({'x': 101, 'y': 300}),
+        (xbeam.Key({'x': 101, 'y': 300}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[4, 5, 6]]))})),
-        (xarray_beam.ChunkKey({'x': 100, 'y': 303}),
+        (xbeam.Key({'x': 100, 'y': 303}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[10, 20, 30]]))})),
-        (xarray_beam.ChunkKey({'x': 101, 'y': 303}),
+        (xbeam.Key({'x': 101, 'y': 303}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[40, 50, 60]]))})),
     ]
     expected = [
-        (xarray_beam.ChunkKey({'x': 100, 'y': 300}),
+        (xbeam.Key({'x': 100, 'y': 300}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[1], [4]]))})),
-        (xarray_beam.ChunkKey({'x': 100, 'y': 301}),
+        (xbeam.Key({'x': 100, 'y': 301}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[2], [5]]))})),
-        (xarray_beam.ChunkKey({'x': 100, 'y': 302}),
+        (xbeam.Key({'x': 100, 'y': 302}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[3], [6]]))})),
-        (xarray_beam.ChunkKey({'x': 100, 'y': 303}),
+        (xbeam.Key({'x': 100, 'y': 303}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[10], [40]]))})),
-        (xarray_beam.ChunkKey({'x': 100, 'y': 304}),
+        (xbeam.Key({'x': 100, 'y': 304}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[20], [50]]))})),
-        (xarray_beam.ChunkKey({'x': 100, 'y': 305}),
+        (xbeam.Key({'x': 100, 'y': 305}),
          xarray.Dataset({'foo': (('x', 'y'), np.array([[30], [60]]))})),
     ]
     actual = inputs | rechunk.RechunkStage(
@@ -325,11 +455,11 @@ class RechunkTest(test_util.TestCase):
   def test_rechunk_end_to_end(self):
     data = np.random.RandomState(0).randint(2 ** 30, size=(10, 20, 30))
     ds = xarray.Dataset({'foo': (('time', 'x', 'y'), data)})
-    key = xarray_beam.ChunkKey({'time': 0, 'x': 0, 'y': 0})
-    time_split = [(key, ds)] | xarray_beam.SplitChunks({'time': 1})
-    space_split = [(key, ds)] | xarray_beam.SplitChunks({'x': 5, 'y': 5})
+    key = xbeam.Key({'time': 0, 'x': 0, 'y': 0})
+    time_split = [(key, ds)] | xbeam.SplitChunks({'time': 1})
+    space_split = [(key, ds)] | xbeam.SplitChunks({'x': 5, 'y': 5})
     with self.subTest('time-to-space'):
-      actual = time_split | rechunk.Rechunk(
+      actual = time_split | xbeam.Rechunk(
           dim_sizes=ds.sizes,
           source_chunks={'time': 1, 'x': 20, 'y': 30},
           target_chunks={'time': 10, 'x': 5, 'y': 5},
@@ -338,7 +468,7 @@ class RechunkTest(test_util.TestCase):
       )
       self.assertIdenticalChunks(actual, space_split)
     with self.subTest('space-to-time'):
-      actual = space_split | rechunk.Rechunk(
+      actual = space_split | xbeam.Rechunk(
           dim_sizes=ds.sizes,
           source_chunks={'time': 10, 'x': 5, 'y': 5},
           target_chunks={'time': 1, 'x': 20, 'y': 30},
@@ -350,12 +480,12 @@ class RechunkTest(test_util.TestCase):
   def test_rechunk_not_all_dimensions(self):
     data = np.random.RandomState(0).randint(2 ** 30, size=(10, 20, 30))
     ds = xarray.Dataset({'foo': (('time', 'x', 'y'), data)})
-    key = xarray_beam.ChunkKey({'x': 0, 'y': 0})
+    key = xbeam.Key({'x': 0, 'y': 0})
     y_split_with_time_key = (
-        [(key | {'time': 0}, ds)] | xarray_beam.SplitChunks({'y': 3})
+        [(key.with_offsets(time=0), ds)] | xbeam.SplitChunks({'y': 3})
     )
-    x_split = [(key, ds)] | xarray_beam.SplitChunks({'x': 2})
-    actual = x_split | rechunk.Rechunk(
+    x_split = [(key, ds)] | xbeam.SplitChunks({'x': 2})
+    actual = x_split | xbeam.Rechunk(
         dim_sizes=ds.sizes,
         source_chunks={'x': 2, 'y': -1},
         target_chunks={'x': -1, 'y': 3},
@@ -368,7 +498,7 @@ class RechunkTest(test_util.TestCase):
         ValueError,
         'source_chunks and target_chunks have different keys',
     ):
-      rechunk.Rechunk(
+      xbeam.Rechunk(
           dim_sizes=ds.sizes,
           source_chunks={'x': 2},
           target_chunks={'y': 3},
@@ -385,10 +515,10 @@ class RechunkTest(test_util.TestCase):
   def test_rechunk_1d(self, size, max_mem, source_chunks, target_chunks):
     data = np.random.RandomState(0).randint(2 ** 30, size=(size,))
     ds = xarray.Dataset({'foo': ('x', data)})
-    key = xarray_beam.ChunkKey({'x': 0})
-    inputs = [(key, ds)] | xarray_beam.SplitChunks({'x': source_chunks})
-    expected = [(key, ds)] | xarray_beam.SplitChunks({'x': target_chunks})
-    actual = inputs | rechunk.Rechunk(
+    key = xbeam.Key({'x': 0})
+    inputs = [(key, ds)] | xbeam.SplitChunks({'x': source_chunks})
+    expected = [(key, ds)] | xbeam.SplitChunks({'x': target_chunks})
+    actual = inputs | xbeam.Rechunk(
         dim_sizes=ds.sizes,
         source_chunks={'x': source_chunks},
         target_chunks={'x': target_chunks},
@@ -400,10 +530,10 @@ class RechunkTest(test_util.TestCase):
   def test_rechunk_uneven_2d(self):
     data = np.random.RandomState(0).randint(2 ** 30, size=(100, 100))
     ds = xarray.Dataset({'foo': (('x', 'y'), data)})
-    key = xarray_beam.ChunkKey({'x': 0, 'y': 0})
-    inputs = [(key, ds)] | xarray_beam.SplitChunks({'x': 12})
-    expected = [(key, ds)] | xarray_beam.SplitChunks({'y': 15})
-    actual = inputs | rechunk.Rechunk(
+    key = xbeam.Key({'x': 0, 'y': 0})
+    inputs = [(key, ds)] | xbeam.SplitChunks({'x': 12})
+    expected = [(key, ds)] | xbeam.SplitChunks({'y': 15})
+    actual = inputs | xbeam.Rechunk(
         dim_sizes=ds.sizes,
         source_chunks={'x': 12, 'y': -1},
         target_chunks={'x': -1, 'y': 15},

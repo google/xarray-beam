@@ -15,7 +15,7 @@
 from absl.testing import absltest
 import numpy as np
 import xarray
-import xarray_beam
+import xarray_beam as xbeam
 from xarray_beam._src import test_util
 
 
@@ -32,29 +32,29 @@ class DatasetToZarrTest(test_util.TestCase):
     )
     chunked = dataset.chunk()
     inputs = [
-        (xarray_beam.ChunkKey({'x': 0}), dataset),
+        (xbeam.Key({'x': 0}), dataset),
     ]
     with self.subTest('no template'):
       temp_dir = self.create_tempdir().full_path
-      inputs | xarray_beam.ChunksToZarr(temp_dir)
+      inputs | xbeam.ChunksToZarr(temp_dir)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
     with self.subTest('with template'):
       temp_dir = self.create_tempdir().full_path
-      inputs | xarray_beam.ChunksToZarr(temp_dir, chunked)
+      inputs | xbeam.ChunksToZarr(temp_dir, chunked)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
     with self.subTest('with zarr_chunks and with template'):
       temp_dir = self.create_tempdir().full_path
       zarr_chunks = {'x': 3}
-      inputs | xarray_beam.ChunksToZarr(temp_dir, chunked, zarr_chunks)
+      inputs | xbeam.ChunksToZarr(temp_dir, chunked, zarr_chunks)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
       self.assertEqual(result.chunks, {'x': (3, 3)})
     with self.subTest('with zarr_chunks and no template'):
       temp_dir = self.create_tempdir().full_path
       zarr_chunks = {'x': 3}
-      inputs | xarray_beam.ChunksToZarr(temp_dir, zarr_chunks=zarr_chunks)
+      inputs | xbeam.ChunksToZarr(temp_dir, zarr_chunks=zarr_chunks)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
       self.assertEqual(result.chunks, {'x': (3, 3)})
@@ -64,7 +64,7 @@ class DatasetToZarrTest(test_util.TestCase):
         ValueError,
         'template does not have any variables chunked with Dask',
     ):
-      xarray_beam.ChunksToZarr(temp_dir, dataset)
+      xbeam.ChunksToZarr(temp_dir, dataset)
 
     temp_dir = self.create_tempdir().full_path
     template = chunked.assign_coords(x=np.zeros(6))
@@ -72,10 +72,10 @@ class DatasetToZarrTest(test_util.TestCase):
         ValueError,
         'template and chunk indexes do not match',
     ):
-      inputs | xarray_beam.ChunksToZarr(temp_dir, template)
+      inputs | xbeam.ChunksToZarr(temp_dir, template)
 
     inputs2 = [
-        (xarray_beam.ChunkKey({'x': 0}),
+        (xbeam.Key({'x': 0}),
          dataset.expand_dims(z=[1, 2])),
     ]
     temp_dir = self.create_tempdir().full_path
@@ -83,7 +83,55 @@ class DatasetToZarrTest(test_util.TestCase):
         ValueError,
         'unexpected new indexes found in chunk',
     ):
-      inputs2 | xarray_beam.ChunksToZarr(temp_dir, template)
+      inputs2 | xbeam.ChunksToZarr(temp_dir, template)
+
+  def test_multiple_vars_chunks_to_zarr(self):
+    dataset = xarray.Dataset(
+        {
+            'foo': ('x', np.arange(0, 60, 10)),
+            'bar': ('x', -np.arange(6)),
+        },
+        coords={'x': np.arange(6)},
+    )
+    chunked = dataset.chunk()
+    inputs = [
+        (xbeam.Key({'x': 0}, {'foo'}), dataset[['foo']]),
+        (xbeam.Key({'x': 0}, {'bar'}), dataset[['bar']]),
+    ]
+    with self.subTest('no template'):
+      temp_dir = self.create_tempdir().full_path
+      inputs | xbeam.ChunksToZarr(temp_dir)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      xarray.testing.assert_identical(dataset, result)
+    with self.subTest('with template'):
+      temp_dir = self.create_tempdir().full_path
+      inputs | xbeam.ChunksToZarr(temp_dir, chunked)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      xarray.testing.assert_identical(dataset, result)
+
+  def test_2d_chunks_to_zarr(self):
+    dataset = xarray.Dataset(
+        {'foo': (('x', 'y'), np.arange(0, 60, 10).reshape(3, 2))},
+        coords={'bar': (('x', 'y'), -np.arange(6).reshape(3, 2))},
+    )
+    with self.subTest('partial key'):
+      inputs = [(xbeam.Key({'x': 0}), dataset)]
+      temp_dir = self.create_tempdir().full_path
+      inputs | xbeam.ChunksToZarr(temp_dir)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      xarray.testing.assert_identical(dataset, result)
+    with self.subTest('split along partial key'):
+      inputs = [(xbeam.Key({'x': 0}), dataset)]
+      temp_dir = self.create_tempdir().full_path
+      inputs | xbeam.SplitChunks({'x': 1}) | xbeam.ChunksToZarr(temp_dir)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      xarray.testing.assert_identical(dataset, result)
+    with self.subTest('full key'):
+      inputs = [(xbeam.Key({'x': 0, 'y': 0}), dataset)]
+      temp_dir = self.create_tempdir().full_path
+      inputs | xbeam.ChunksToZarr(temp_dir)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      xarray.testing.assert_identical(dataset, result)
 
   def test_dataset_to_zarr(self):
     dataset = xarray.Dataset(
@@ -96,7 +144,7 @@ class DatasetToZarrTest(test_util.TestCase):
     temp_dir = self.create_tempdir().full_path
     (
         test_util.EagerPipeline()
-        | xarray_beam.DatasetToZarr(chunked, temp_dir)
+        | xbeam.DatasetToZarr(chunked, temp_dir)
     )
     actual = xarray.open_zarr(temp_dir, consolidated=True)
     xarray.testing.assert_identical(actual, dataset)
@@ -108,7 +156,7 @@ class DatasetToZarrTest(test_util.TestCase):
     ):
       (
           test_util.EagerPipeline()
-          | xarray_beam.DatasetToZarr(dataset, temp_dir)
+          | xbeam.DatasetToZarr(dataset, temp_dir)
       )
 
 
