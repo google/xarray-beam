@@ -58,6 +58,7 @@ class Mean:
 
   @dataclasses.dataclass
   class Globally(beam.PTransform):
+    """Calculate the global mean over a pcollection."""
     skipna: bool = True
     dtype: Any = None
 
@@ -67,6 +68,7 @@ class Mean:
 
   @dataclasses.dataclass
   class PerKey(beam.PTransform):
+    """Calculate the per-key mean over a pcollection."""
     skipna: bool = True
     dtype: Any = None
 
