@@ -2,6 +2,7 @@
 myst-nb==0.12.3
 myst-parser==0.13.7
 sphinx_rtd_theme
+scipy==1.7.1
 
 # xarray-beam requirements
 apache-beam==2.31.0
