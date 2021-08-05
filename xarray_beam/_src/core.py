@@ -304,3 +304,34 @@ class DatasetToChunks(beam.PTransform):
             self._key_to_chunks, num_threads=self.num_threads
         )
     )
+
+
+def validate_chunk(key: Key, dataset: xarray.Dataset) -> None:
+  """Verify that keys correpond to Dataset properties."""
+  missing_keys = [repr(k) for k in key.offsets.keys() if k not in dataset.dims]
+  if missing_keys:
+    raise ValueError(
+        f"Key offset(s) {', '.join(missing_keys)} in {key} not found in Dataset "
+        f"dimensions: {dataset!r}"
+    )
+
+  if key.vars is None:
+    return
+  missing_vars = [repr(v) for v in key.vars if v not in dataset.data_vars]
+  if missing_vars:
+    raise ValueError(
+        f"Key var(s) {', '.join(missing_vars)} in {key} not found in Dataset data "
+        f"variables: {dataset!r}"
+    )
+
+
+class ValidateChunk(beam.PTransform):
+  """Check that keys match the dataset."""
+
+  def _validate(self, key, dataset):
+    # Other checks may come later...
+    validate_chunk(key, dataset)
+    return key, dataset
+
+  def expand(self, pcoll):
+    return pcoll | beam.MapTuple(self._validate)
