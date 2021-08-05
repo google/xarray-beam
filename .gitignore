@@ -4,5 +4,5 @@ dist
 docs/.ipynb_checkpoints
 docs/_build
 docs/_autosummary
-docs/my-data.zarr
+docs/*.zarr
 __pycache__

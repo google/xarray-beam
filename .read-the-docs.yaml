@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# TODO
-=======
 # .readthedocs.yaml
 # Read the Docs configuration file
 # See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
@@ -23,4 +20,3 @@ python:
     - method: pip
       path: .
   system_packages: false
->>>>>>> f2470a9 (Initial sphinx docs.)
