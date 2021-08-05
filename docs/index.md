@@ -6,10 +6,12 @@ The documentation includes narrative documentation that will walk you through th
 
 We recommend reading both, as well as a few [end to end examples](https://github.com/google/xarray-beam/tree/main/examples) to understand what code using Xarray-Beam typically looks like.
 
+## Contents
+
 ```{toctree}
 :maxdepth: 1
 data-model.ipynb
-io.ipynb
+read-write.ipynb
 aggregation.ipynb
 rechunking.ipynb
 api.md
