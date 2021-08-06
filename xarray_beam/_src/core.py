@@ -325,8 +325,8 @@ def validate_chunk(key: Key, dataset: xarray.Dataset) -> None:
     )
 
 
-class ValidateChunk(beam.PTransform):
-  """Check that keys match the dataset."""
+class ValidateEachChunk(beam.PTransform):
+  """Check that keys match the dataset for each key, dataset tuple."""
 
   def _validate(self, key, dataset):
     # Other checks may come later...

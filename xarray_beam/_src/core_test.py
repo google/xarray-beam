@@ -278,7 +278,7 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertIdenticalChunks(actual, expected)
 
 
-class ValidateChunksTest(test_util.TestCase):
+class ValidateEachChunkTest(test_util.TestCase):
 
   def test_unmatched_dimension_raises_error(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
@@ -286,7 +286,7 @@ class ValidateChunksTest(test_util.TestCase):
       (
         test_util.EagerPipeline()
         | beam.Create([(xbeam.Key({'x': 0, 'y': 0}), dataset)])
-        | xbeam.ValidateChunk()
+        | xbeam.ValidateEachChunk()
       )
     self.assertIn(
       "Key offset(s) 'y' in Key(offsets={'x': 0, 'y': 0}, vars=None) not found in "
@@ -300,7 +300,7 @@ class ValidateChunksTest(test_util.TestCase):
       (
           test_util.EagerPipeline()
           | beam.Create([(xbeam.Key({'x': 0}, {'bar'}), dataset)])
-          | xbeam.ValidateChunk()
+          | xbeam.ValidateEachChunk()
       )
     self.assertIn(
       "Key var(s) 'bar' in Key(offsets={'x': 0}, vars={'bar'}) not found in Dataset "
@@ -314,7 +314,7 @@ class ValidateChunksTest(test_util.TestCase):
     actual = (
         test_util.EagerPipeline()
         | xbeam.DatasetToChunks(dataset, chunks={'x': -1})
-        | xbeam.ValidateChunk()
+        | xbeam.ValidateEachChunk()
     )
     self.assertIdenticalChunks(actual, expected)
 

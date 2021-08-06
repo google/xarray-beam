@@ -17,7 +17,7 @@
 from xarray_beam._src.core import (
     Key,
     DatasetToChunks,
-    ValidateChunk,
+    ValidateEachChunk,
     offsets_to_slices,
     validate_chunk
 )
