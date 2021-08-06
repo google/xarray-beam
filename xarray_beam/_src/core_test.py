@@ -297,8 +297,7 @@ class ValidateEachChunkTest(test_util.TestCase):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
     with self.assertRaises(ValueError) as e:
       (
-          test_util.EagerPipeline()
-          | beam.Create([(xbeam.Key({'x': 0}, {'bar'}), dataset)])
+          [(xbeam.Key({'x': 0}, {'bar'}), dataset)]
           | xbeam.ValidateEachChunk()
       )
     self.assertIn(
