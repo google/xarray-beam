@@ -209,6 +209,24 @@ class RechunkTest(test_util.TestCase):
       actual = consolidated | xbeam.SplitVariables()
       self.assertIdenticalChunks(actual, split)
 
+  def test_consolidate_chunks_not_fully_shared_dims(self):
+    inputs = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 5}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+        (xbeam.Key({'y': 0}, {'bar'}),
+         xarray.Dataset({'bar': ('y', np.arange(0, 5))})),
+    ]
+    actual = xbeam.consolidate_chunks(inputs)
+    expected = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 10))})),
+        (xbeam.Key({'y': 0}, {'bar'}),
+         xarray.Dataset({'bar': ('y', np.arange(0, 5))})),
+    ]
+    self.assertIdenticalChunks(actual, expected)
+
   def test_consolidate_with_minus_one_chunks(self):
     inputs = [
         (xbeam.Key({'x': 0}),
@@ -275,7 +293,31 @@ class RechunkTest(test_util.TestCase):
         ValueError,
         re.escape("some expected chunks are missing for vars=frozenset({'foo'}")
     ):
-      list(xbeam.consolidate_chunks(inputs, {'x': -1}))
+      list(xbeam.consolidate_chunks(inputs))
+
+  def test_consolidate_variables(self):
+    inputs = [
+        (
+            xbeam.Key({'x': 0}, vars={'foo'}),
+            xarray.Dataset({'foo': ('x', [1, 2])})),
+        (
+            xbeam.Key({'x': 2}, vars={'foo'}),
+            xarray.Dataset({'foo': ('x', [1, 2])})),
+        (
+            xbeam.Key({'x': 0}, vars={'bar'}),
+            xarray.Dataset({'bar': ('x', [5, 6])})),
+    ]
+    actual = xbeam.consolidate_variables(inputs)
+    expected = [
+        (
+            xbeam.Key({'x': 0}, {'foo', 'bar'}),
+            xarray.Dataset({'foo': ('x', [1, 2]),
+                            'bar': ('x', [5, 6])})),
+        (
+            xbeam.Key({'x': 2}, vars={'foo'}),
+            xarray.Dataset({'foo': ('x', [1, 2])})),
+    ]
+    self.assertIdenticalChunks(actual, expected)
 
   def test_consolidate_variables_overlapping_variables(self):
     inputs = [
@@ -289,7 +331,7 @@ class RechunkTest(test_util.TestCase):
     ]
     with self.assertRaisesRegex(
         ValueError,
-        "cannot merge chunks with overlapping variables: "
+        'cannot merge chunks with overlapping variables: '
     ):
       inputs | xbeam.ConsolidateVariables()
 
@@ -377,6 +419,66 @@ class RechunkTest(test_util.TestCase):
     )
     actual = xbeam.consolidate_fully(inputs)
     self.assertIdenticalChunks([actual], [expected])
+
+  def test_consolidate_overlapping_variables(self):
+    inputs = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 0}, {'foo', 'bar'}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10)),
+                         'bar': ('x', np.arange(0, 5))})),
+    ]
+    with self.assertRaisesRegex(
+        ValueError,
+        "merging dataset chunks with variables .*'foo'.* failed",
+    ):
+      xbeam.consolidate_fully(inputs)
+
+  def test_consolidate_fully_not_fully_shared_dims(self):
+    inputs = [
+        (xbeam.Key({'x': 0}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 5}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+        (xbeam.Key({'y': 2}, {'bar'}),
+         xarray.Dataset({'bar': ('y', np.arange(0, 2))})),
+    ]
+    actual = xbeam.consolidate_fully(inputs)
+    expected = [
+        (xbeam.Key({'x': 0, 'y': 2}, {'foo', 'bar'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 10)),
+                         'bar': ('y', np.arange(0, 2))})),
+    ]
+    self.assertIdenticalChunks([actual], expected)
+
+  def test_consolidate_fully_missing_chunks(self):
+    inputs = [
+        (xbeam.Key({'x': 5}, {'foo'}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+        (xbeam.Key({'x': 0}, {'bar', 'baz'}),
+         xarray.Dataset({'bar': ('x', np.arange(0, 5)),
+                         'baz': ('x', np.arange(0, 5))})),
+    ]
+    with self.assertRaisesRegex(
+        ValueError, 'some expected chunks are missing'):
+      xbeam.consolidate_fully(inputs)
+
+  def test_consolidate_fully_keys_with_unset_vars(self):
+    inputs = [
+        (xbeam.Key({'x': 0}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 5))})),
+        (xbeam.Key({'x': 5}),
+         xarray.Dataset({'foo': ('x', np.arange(5, 10))})),
+        (xbeam.Key({'y': 2}, {'bar'}),
+         xarray.Dataset({'bar': ('y', np.arange(0, 2))})),
+    ]
+    actual = xbeam.consolidate_fully(inputs)
+    expected = [
+        (xbeam.Key({'x': 0, 'y': 2}, {'foo', 'bar'}),
+         xarray.Dataset({'foo': ('x', np.arange(0, 10)),
+                         'bar': ('y', np.arange(0, 2))})),
+    ]
+    self.assertIdenticalChunks([actual], expected)
 
   def test_in_memory_rechunk_success(self):
     inputs = [

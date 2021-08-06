@@ -17,7 +17,8 @@ import itertools
 import logging
 import textwrap
 from typing import (
-    Any, Dict, Iterable, Iterator, List, Optional, Mapping, Tuple, Union
+    Any, Dict, Iterable, Iterator, List, Optional, Mapping, Sequence, Tuple,
+    Union
 )
 
 import apache_beam as beam
@@ -78,6 +79,85 @@ def rechunking_plan(
   return [dict(zip(dim_sizes.keys(), shapes)) for shapes in plan_shapes]
 
 
+def _consolidate_chunks_in_var_group(
+    inputs: Sequence[Tuple[core.Key, xarray.Dataset]],
+    combine_kwargs: Optional[Mapping[str, Any]]) -> Tuple[
+        core.Key, xarray.Dataset]:
+  """Consolidate chunks across offsets with identical vars."""
+  unique_offsets = collections.defaultdict(set)
+  unique_var_groups = set()
+  for key, chunk in inputs:
+    for dim, offset in key.offsets.items():
+      unique_offsets[dim].add(offset)
+    unique_var_groups.add(key.vars)
+
+  if len(unique_var_groups) != 1:
+    raise ValueError('expected exactly one unique var group, '
+                     f'got {unique_var_groups}')
+  (cur_vars, ) = unique_var_groups
+
+  offsets = {k: sorted(v) for k, v in unique_offsets.items()}
+  combined_offsets = {k: v[0] for k, v in offsets.items()}
+  combined_key = core.Key(combined_offsets, cur_vars)
+
+  # Consolidate inputs in a single xarray.Dataset.
+  # `inputs` is a flat list like `[(k_00, ds_00), (k_01, ds_01), ...]` where
+  # `k_ij` is a Key giving the (multi-dimensional) index of `ds_ij` in a
+  # virtual larger Dataset.
+  # Now we want to actually concatenate along all those dimensions, e.g., the
+  # equivalent of building a large matrix out of sub-matrices:
+  #       ⌈[x_00 x_01] ...⌉   ⌈x_00 x_01 ...⌉
+  #   X = |[x_10 x_11] ...| = |x_10 x_11 ...|
+  #       |[x_20 x_21] ...|   |x_20 x_21 ...|
+  #       ⌊    ...     ...⌋   ⌊ ...  ... ...⌋
+  # In NumPy, this would be done with `np.block()`.
+  offset_index = core.compute_offset_index(offsets)
+  shape = [len(v) for v in offsets.values()]
+  nested_array = np.empty(dtype=object, shape=shape)
+  if np.prod(shape) != len(inputs):
+    raise ValueError(f'some expected chunks are missing for vars={cur_vars} '
+                     f'shape: {shape} len(inputs): {len(inputs)}')
+
+  for key, chunk in inputs:
+    nested_key = tuple(offset_index[dim][key.offsets[dim]] for dim in offsets)
+    assert nested_array[nested_key] is None
+    nested_array[nested_key] = chunk
+
+  kwargs = dict(
+      data_vars='minimal',
+      coords='minimal',
+      join='exact',
+      combine_attrs='override',
+  )
+  if combine_kwargs is not None:
+    kwargs.update(combine_kwargs)
+
+  try:
+    combined_dataset = xarray.combine_nested(
+        nested_array.tolist(),
+        concat_dim=list(offsets),
+        **kwargs
+    )
+    return combined_key, combined_dataset
+  except (ValueError, xarray.MergeError) as original_error:
+    summaries = []
+    for axis, dim in enumerate(offsets):
+      repr_string = '\n'.join(
+          repr(ds) for ds in nested_array[(0,) * axis + (slice(2),)].tolist()
+      )
+      if nested_array.shape[axis] > 2:
+        repr_string += '\n...'
+      repr_string = textwrap.indent(repr_string, prefix='  ')
+      summaries.append(
+          f'Leading datasets along dimension {dim!r}:\n{repr_string}'
+      )
+    summaries_str = '\n'.join(summaries)
+    raise ValueError(
+        f'combining nested dataset chunks for vars={cur_vars} with '
+        f'offsets={offsets} failed.\n' + summaries_str
+    ) from original_error
+
+
 def consolidate_chunks(
     inputs: Iterable[Tuple[core.Key, xarray.Dataset]],
     combine_kwargs: Optional[Mapping[str, Any]] = None,
@@ -88,75 +168,26 @@ def consolidate_chunks(
   if len(set(keys)) < len(keys):
     raise ValueError(f'chunk keys are not unique: {keys}')
 
-  # Reconstruct shared offsets along each dimension by inspecting chunk keys.
-  unique_offsets = collections.defaultdict(set)
+  # Group chunks by variable groups and combine offsets to validate inputs.
   inputs_by_vars = collections.defaultdict(list)
+  combined_offsets_by_dim = collections.defaultdict(set)
+  combined_offsets_by_vars = collections.defaultdict(set)
   for key, chunk in inputs:
-    for dim, offset in key.offsets.items():
-      unique_offsets[dim].add(offset)
     inputs_by_vars[key.vars].append((key, chunk))
+    for dim, offset in key.offsets.items():
+      combined_offsets_by_dim[dim].add(offset)
+      combined_offsets_by_vars[(key.vars, dim)].add(offset)
 
-  offsets = {k: sorted(v) for k, v in unique_offsets.items()}
-  combined_offsets = {k: v[0] for k, v in offsets.items()}
+  # All var groups need to have the exact same set of offsets on common
+  # dimensions.
+  for (cur_vars, dim), offsets in combined_offsets_by_vars.items():
+    if offsets != combined_offsets_by_dim[dim]:
+      raise ValueError('some expected chunks are missing for '
+                       f'vars={cur_vars}')
 
   for cur_vars, cur_inputs in inputs_by_vars.items():
-
-    combined_key = core.Key(combined_offsets, cur_vars)
-
-    # Consolidate inputs in a single xarray.Dataset.
-    # `inputs` is a flat list like `[(k_00, ds_00), (k_01, ds_01), ...]` where
-    # `k_ij` is a Key giving the (multi-dimensional) index of `ds_ij` in a
-    # virtual larger Dataset.
-    # Now we want to actually concatenate along all those dimensions, e.g., the
-    # equivalent of building a large matrix out of sub-matrices:
-    #       ⌈[x_00 x_01] ...⌉   ⌈x_00 x_01 ...⌉
-    #   X = |[x_10 x_11] ...| = |x_10 x_11 ...|
-    #       |[x_20 x_21] ...|   |x_20 x_21 ...|
-    #       ⌊    ...     ...⌋   ⌊ ...  ... ...⌋
-    # In NumPy, this would be done with `np.block()`.
-    offset_index = core.compute_offset_index(offsets)
-    shape = [len(v) for v in offsets.values()]
-    if np.prod(shape) != len(cur_inputs):
-      raise ValueError(f'some expected chunks are missing for vars={cur_vars}')
-    nested_array = np.empty(dtype=object, shape=shape)
-    for key, chunk in cur_inputs:
-      nested_key = tuple(offset_index[dim][key.offsets[dim]] for dim in offsets)
-      assert nested_array[nested_key] is None
-      nested_array[nested_key] = chunk
-
-    kwargs = dict(
-        data_vars='minimal',
-        coords='minimal',
-        join='exact',
-        combine_attrs='override',
-    )
-    if combine_kwargs is not None:
-      kwargs.update(combine_kwargs)
-
-    try:
-      combined_dataset = xarray.combine_nested(
-          nested_array.tolist(),
-          concat_dim=list(offsets),
-          **kwargs
-      )
-    except (ValueError, xarray.MergeError) as original_error:
-      summaries = []
-      for axis, dim in enumerate(offsets):
-        repr_string = '\n'.join(
-            repr(ds) for ds in nested_array[(0,) * axis + (slice(2),)].tolist()
-        )
-        if nested_array.shape[axis] > 2:
-          repr_string += '\n...'
-        repr_string = textwrap.indent(repr_string, prefix='  ')
-        summaries.append(
-            f'Leading datasets along dimension {dim!r}:\n{repr_string}'
-        )
-      summaries_str = '\n'.join(summaries)
-      raise ValueError(
-          f'combining nested dataset chunks for vars={cur_vars} with '
-          f'offsets={offsets} failed.\n' + summaries_str
-      ) from original_error
-
+    combined_key, combined_dataset = _consolidate_chunks_in_var_group(
+        cur_inputs, combine_kwargs)
     yield combined_key, combined_dataset
 
 
@@ -207,11 +238,45 @@ def consolidate_fully(
     combine_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[core.Key, xarray.Dataset]:
   """Consolidate chunks via merge/concat into a single (Key, Dataset) pair."""
-  concatenated = consolidate_chunks(inputs, combine_kwargs)
-  merged = list(consolidate_variables(concatenated, merge_kwargs))
-  assert len(merged) == 1, [key for key, _ in merged]
-  (key, dataset), = merged
-  return key, dataset
+  concatenated_chunks = []
+  combined_offsets = {}
+  combined_vars = set()
+  for key, chunk in consolidate_chunks(inputs, combine_kwargs):
+    # We expect all chunks to be fully combined in all dimensions and all chunks
+    # to have the same offset (in each dimension).  The chunks from
+    # consolidate_chunks() should already have this property but we explicitly
+    # check it here again in case consolidate_chunks changes.
+    for dim, offset in key.offsets.items():
+      if dim in combined_offsets and combined_offsets[dim] != offset:
+        raise ValueError('consolidating chunks fully failed because '
+                         f'chunk\n{chunk}\n has offsets {key.offsets} '
+                         f'that differ from {combined_offsets}')
+      combined_offsets[dim] = offset
+    concatenated_chunks.append(chunk)
+    combined_vars.update(chunk.keys())
+
+  # Merge variables, but unlike consolidate_variables, we merge all chunks and
+  # not just chunks per unique key.
+  kwargs = dict(
+      compat='equals',
+      join='exact',
+      combine_attrs='override',
+  )
+  if merge_kwargs is not None:
+    kwargs.update(merge_kwargs)
+
+  try:
+    dataset = xarray.merge(concatenated_chunks, **kwargs)
+  except (ValueError, xarray.MergeError) as original_error:
+    repr_string = '\n'.join(repr(ds) for ds in concatenated_chunks[:2])
+    if len(concatenated_chunks) > 2:
+      repr_string += '\n...'
+    repr_string = textwrap.indent(repr_string, prefix='  ')
+    raise ValueError(
+        f'merging dataset chunks with variables {combined_vars} failed.\n'
+        + repr_string
+    ) from original_error
+  return core.Key(combined_offsets, combined_vars), dataset
 
 
 class _ConsolidateBase(beam.PTransform):
