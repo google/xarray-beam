@@ -53,8 +53,10 @@
 ```{eval-rst}
 .. autosummary::
     :toctree: _autosummary
-
+    
+    ValidateEachChunk
     offsets_to_slices
+    validate_chunk
     consolidate_chunks
     consolidate_variables
     consolidate_fully
