@@ -60,12 +60,12 @@ def main(argv):
   max_month = source_dataset.time.dt.month.max().item()  # normally 12
   template = (
       source_dataset
+      .chunk()
+      .pipe(xarray.zeros_like)
       .isel(time=0, drop=True)
-      .pipe(xarray.zeros_like)  # don't load even time=0 into memory
       .expand_dims(month=np.arange(1, max_month + 1), hour=np.arange(24))
-      .chunk({'hour': 1, 'month': 1})  # make lazy with dask
-      .pipe(xarray.zeros_like)  # compress the dask graph
   )
+  output_chunks = {'hour': 1, 'month': 1}
 
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
     (
@@ -74,7 +74,7 @@ def main(argv):
         | xbeam.SplitChunks({'time': 1})
         | beam.MapTuple(rekey_chunk_on_month_hour)
         | xbeam.Mean.PerKey()
-        | xbeam.ChunksToZarr(OUTPUT_PATH.value, template)
+        | xbeam.ChunksToZarr(OUTPUT_PATH.value, template, output_chunks)
     )
 
 

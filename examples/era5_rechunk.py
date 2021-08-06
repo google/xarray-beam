@@ -39,6 +39,9 @@ def main(argv):
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
     (
         root
+        # Note: splitting across the 19 variables in this dataset is a critical
+        # optimization step here, because it allows rechunking to make use of
+        # much larger intermediate chunks.
         | xbeam.DatasetToChunks(source_dataset, source_chunks, split_vars=True)
         | xbeam.Rechunk(
             source_dataset.sizes,

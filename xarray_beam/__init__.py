@@ -20,7 +20,6 @@ from xarray_beam._src.core import (
     offsets_to_slices,
 )
 from xarray_beam._src.combiners import (
-    Mean,
     MeanCombineFn,
 )
 from xarray_beam._src.rechunk import (
@@ -40,5 +39,6 @@ from xarray_beam._src.zarr import (
     ChunksToZarr,
     DatasetToZarr,
 )
+from xarray_beam import Mean
 
 __version__ = '0.2.0'
