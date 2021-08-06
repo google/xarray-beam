@@ -48,13 +48,21 @@
     Rechunk
 ```
 
-## Utility functions
+## Utility transforms
 
 ```{eval-rst}
 .. autosummary::
     :toctree: _autosummary
     
     ValidateEachChunk
+```
+
+## Utility functions
+
+```{eval-rst}
+.. autosummary::
+    :toctree: _autosummary
+    
     offsets_to_slices
     validate_chunk
     consolidate_chunks
