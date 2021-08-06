@@ -40,6 +40,7 @@ class Key:
   """A key for keeping track of chunks of a distributed xarray.Dataset.
 
   Key object in Xarray-Beam include two components:
+
   - "offsets": an immutable dict indicating integer offsets (total number of
     array elements) from the origin along each dimension for this chunk.
   - "vars": either an frozenset or None, indicating the subset of Dataset

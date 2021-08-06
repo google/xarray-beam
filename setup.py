@@ -24,6 +24,13 @@ base_requires = [
     'zarr',
     'xarray',
 ]
+docs_requires = [
+    'myst-nb',
+    'myst-parser',
+    'sphinx',
+    'sphinx_rtd_theme',
+    'scipy',
+]
 tests_requires = [
     'absl-py',
     'pandas',
@@ -39,6 +46,7 @@ setuptools.setup(
     install_requires=base_requires,
     extras_require={
         'tests': tests_requires,
+        'docs': docs_requires,
     },
     url='https://github.com/google/xarray-beam',
     packages=setuptools.find_packages(),

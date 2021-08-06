@@ -166,6 +166,7 @@ class ChunksToZarr(beam.PTransform):
         fed into this PTransform. One or more variables are expected to be
         "chunked" with Dask, and will only have their metadata written to Zarr
         without array values. Three types of inputs are supported:
+
         1. If `template` is an xarray.Dataset, the Zarr store is setup eagerly.
         2. If `template` is a beam.pvalue.AsSingleton object representing the
            result of a prior step in a Beam pipeline, the Zarr store is setup as
