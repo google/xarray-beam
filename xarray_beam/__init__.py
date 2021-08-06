@@ -17,7 +17,9 @@
 from xarray_beam._src.core import (
     Key,
     DatasetToChunks,
+    ValidateEachChunk,
     offsets_to_slices,
+    validate_chunk
 )
 from xarray_beam._src.combiners import (
     MeanCombineFn,
