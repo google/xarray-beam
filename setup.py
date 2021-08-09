@@ -36,6 +36,7 @@ tests_requires = [
     'pandas',
     'pytest',
     'pangeo-forge-recipes',
+    'scipy',
 ]
 
 setuptools.setup(
