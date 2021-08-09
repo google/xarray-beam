@@ -10,6 +10,7 @@ We recommend reading both, as well as a few [end to end examples](https://github
 
 ```{toctree}
 :maxdepth: 1
+why-xarray-beam.md
 data-model.ipynb
 read-write.ipynb
 aggregation.ipynb
