@@ -139,7 +139,8 @@ def _write_chunk_to_zarr(key, chunk, store, template):
   ]
   writable_chunk = chunk.drop_vars(already_written)
   try:
-    future = writable_chunk.chunk().to_zarr(store, region=region, compute=False)
+    future = writable_chunk.chunk().to_zarr(store, region=region, compute=False,
+                                            consolidated=True)
     future.compute(num_workers=len(writable_chunk))
   except Exception as e:
     raise RuntimeError(
