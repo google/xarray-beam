@@ -35,6 +35,7 @@ tests_requires = [
     'absl-py',
     'pandas',
     'pytest',
+    'pangeo-forge-recipes',
 ]
 
 setuptools.setup(
