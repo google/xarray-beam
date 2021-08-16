@@ -10,10 +10,10 @@ multi-dimensional labeled arrays, such as:
 -   Ad-hoc computation on Xarray data, by dividing a `xarray.Dataset` into many
     smaller pieces ("chunks").
 -   Adjusting array chunks, using the
-    [Rechunker algorithm](https://rechunker.readthedocs.io/en/latest/algorithm.html)
--   Ingesting large multi-dimensional array datasets into an analysis-ready,
+    [Rechunker algorithm](https://rechunker.readthedocs.io/en/latest/algorithm.html).
+-   Ingesting large, multi-dimensional array datasets into an analysis-ready,
     cloud-optimized format, namely [Zarr](https://zarr.readthedocs.io/) (see
-    also [Pangeo Forge](https://github.com/pangeo-forge/pangeo-forge-recipes))
+    also [Pangeo Forge](https://github.com/pangeo-forge/pangeo-forge-recipes)).
 -   Calculating statistics (e.g., "climatology") across distributed datasets
     with arbitrary groups.
 
@@ -25,7 +25,7 @@ For more about our approach and how to get started,
 Expect sharp edges 🔪 and performance cliffs 🧗, particularly related to the
 management of lazy data with Dask and reading/writing data with Zarr. We have
 used it to efficiently process ~25 TB datasets. We _expect_ it to scale to PB
-size datasets but that's easier said than done. We welcome feedback and
+size datasets, but that's easier said than done. We welcome feedback and
 contributions from early adopters, and hope to have it ready for wider audience
 soon.
 

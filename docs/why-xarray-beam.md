@@ -12,21 +12,22 @@ multi-dimensional labeled arrays, such as:
 -   Ad-hoc computation on Xarray data, by dividing a `xarray.Dataset` into many
     smaller pieces ("chunks").
 -   Adjusting array chunks, using the
-    [Rechunker algorithm](https://rechunker.readthedocs.io/en/latest/algorithm.html)
--   Ingesting large multi-dimensional array datasets into an analysis-ready,
+    [Rechunker algorithm](https://rechunker.readthedocs.io/en/latest/algorithm.html).
+-   Ingesting large, multi-dimensional array datasets into an analysis-ready,
     cloud-optimized format, namely [Zarr](https://zarr.readthedocs.io/) (see
-    also [Pangeo Forge](https://github.com/pangeo-forge/pangeo-forge-recipes))
+    also [Pangeo Forge](https://github.com/pangeo-forge/pangeo-forge-recipes)).
 -   Calculating statistics (e.g., "climatology") across distributed datasets
     with arbitrary groups.
 
 ## Our approach
 
 In Xarray-Beam, distributed Xarray datasets are represented by Beam PCollections
-of `(xarray_beam.Key, xarray.Dataset)` pairs and are manipulated by beam
-PTransforms, where {py:class}`~xarray_beam.Key` provides metadata specifying
-variables and chunk offsets for each "chunk" in the unordered PCollection.
-The chunking model is flexible, allowing datasets to be split across multiple
-variables and/or into orthogonal contiguous "chunks" along dimensions.
+of `(xarray_beam.Key, xarray.Dataset)` pairs, corresponding to a "chunk" of a
+larger (virtual) dataset. The {py:class}`~xarray_beam.Key` provides sufficient
+metadata for Beam PTransforms like those included in Xarray-Beam to perform
+collective operations on the entire dataset. This chunking model is highly
+flexible, allowing datasets to be split across multiple variables and/or
+into orthogonal, contiguous "chunks" along dimensions.
 
 Xarray-Beam does not (yet) include high-level abstrations like a "distributed
 dataset" object. Users need to have a mental model for how their data pipeline
