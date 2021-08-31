@@ -153,6 +153,9 @@ class TestOffsetsToSlices(test_util.TestCase):
     slices = core.offsets_to_slices(offsets, {'x': 5, 'y': 10})
     self.assertEqual(slices, expected)
 
+    expected = {'x': slice(0, 5, 1),
+                'y': slice(10, 20, 1),
+                'extra_key': slice(0, 100, 1)}
     slices = core.offsets_to_slices(
         offsets, {'x': 5, 'y': 10, 'extra_key': 100}
     )
