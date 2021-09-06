@@ -13,6 +13,7 @@
 # limitations under the License.
 """Tests for xarray_beam._src.core."""
 from absl.testing import absltest
+from absl.testing import parameterized
 import numpy as np
 import xarray
 import xarray_beam as xbeam
@@ -109,10 +110,16 @@ class DatasetToZarrTest(test_util.TestCase):
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
 
-  def test_2d_chunks_to_zarr(self):
+  @parameterized.named_parameters(
+      {'testcase_name': 'combined_coords',
+       'coords': {'bar': (('x', 'y'), -np.arange(6).reshape(3, 2))}},
+      {'testcase_name': 'separate_coords',
+       'coords': {'x': np.arange(3), 'y': np.arange(2)}},
+  )
+  def test_2d_chunks_to_zarr(self, coords):
     dataset = xarray.Dataset(
         {'foo': (('x', 'y'), np.arange(0, 60, 10).reshape(3, 2))},
-        coords={'bar': (('x', 'y'), -np.arange(6).reshape(3, 2))},
+        coords=coords,
     )
     with self.subTest('partial key'):
       inputs = [(xbeam.Key({'x': 0}), dataset)]
@@ -158,6 +165,17 @@ class DatasetToZarrTest(test_util.TestCase):
           test_util.EagerPipeline()
           | xbeam.DatasetToZarr(dataset, temp_dir)
       )
+
+  def test_validate_zarr_chunk_accepts_partial_key(self):
+    dataset = xarray.Dataset(
+        {'foo': (('x', 'y'), np.zeros((3, 2)))},
+        coords={'x': np.arange(3), 'y': np.arange(2)},
+    )
+    # Should not raise an exception:
+    xbeam._src.zarr._validate_zarr_chunk(
+        key=xbeam.Key({'x': 0}),
+        chunk=dataset,
+        template=dataset.chunk())
 
 
 if __name__ == '__main__':

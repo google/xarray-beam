@@ -104,7 +104,7 @@ def _setup_zarr(template, store, zarr_chunks):
   )
 
 
-def _validate_chunk(key, chunk, template):
+def _validate_zarr_chunk(key, chunk, template):
   """Check a chunk for consistency against the given template."""
   unexpected_indexes = [k for k in chunk.indexes if k not in template.indexes]
   if unexpected_indexes:
@@ -202,12 +202,12 @@ class ChunksToZarr(beam.PTransform):
     self.zarr_chunks = zarr_chunks
     self.num_threads = num_threads
 
-  def _validate_chunk(self, key, chunk, template=None):
+  def _validate_zarr_chunk(self, key, chunk, template=None):
     # If template doesn't have a default value, Beam errors with "Side inputs
     # must have defaults for MapTuple". Beam should probably be happy with a
     # keyword-only argument, too, but it doesn't like that yet.
     assert template is not None
-    _validate_chunk(key, chunk, template)
+    _validate_zarr_chunk(key, chunk, template)
     return key, chunk
 
   def _write_chunk_to_zarr(self, key, chunk, template=None):
@@ -235,7 +235,7 @@ class ChunksToZarr(beam.PTransform):
         pcoll
         | 'WaitForSetup' >> beam.Map(lambda x, _: x, setup_result)
         | 'ValidateChunks' >> beam.MapTuple(
-            self._validate_chunk, template=template,
+            self._validate_zarr_chunk, template=template,
         )
         | 'WriteChunks' >> threadmap.ThreadMapTuple(
             self._write_chunk_to_zarr,

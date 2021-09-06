@@ -162,6 +162,10 @@ def offsets_to_slices(
   Returns:
     Slices suitable for indexing with xarray.Dataset.isel().
 
+  Raises:
+    ValueError: if an offset is specified for a dimension where there is no
+      corresponding size specified.
+
   Example usage::
 
     >>> offsets_to_slices({'x': 100}, sizes={'x': 10})
@@ -172,9 +176,13 @@ def offsets_to_slices(
   if base is None:
     base = {}
   slices = {}
-  for k, v in offsets.items():
-    offset = v - base.get(k, 0)
-    slices[k] = slice(offset, offset + sizes[k], 1)
+  for k in offsets.keys():
+    if k not in sizes:
+      raise ValueError(f"An offset was specified for dimension {k}, but we don't "
+                       "have a chunk size for this dimension.")
+  for k, size in sizes.items():
+    offset = offsets.get(k, 0) - base.get(k, 0)
+    slices[k] = slice(offset, offset + size, 1)
   return slices
 
 
