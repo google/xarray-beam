@@ -22,55 +22,54 @@ from pangeo_forge_recipes.patterns import FilePattern, ConcatDim
 
 from xarray_beam._src import core
 from xarray_beam._src import test_util
-from xarray_beam._src.pangeo import FilePatternToChunks, _zero_dimensions, \
-  _expand_dimensions_by_key
+from xarray_beam._src.pangeo_forge import (
+    FilePatternToChunks,
+    _expand_dimensions_by_key
+)
 
 
 class ExpandDimensionsByKeyTest(test_util.TestCase):
-  TEST_DATA = test_util.dummy_era5_surface_dataset()
-  LEVEL = ConcatDim("level", list(range(91, 100)))
-  PATTERN = FilePattern(lambda level: f"gs://dir/{level}.nc", LEVEL)
+
+  def setUp(self):
+    self.test_data = test_util.dummy_era5_surface_dataset()
+    self.level = ConcatDim("level", list(range(91, 100)))
+    self.pattern = FilePattern(lambda level: f"gs://dir/{level}.nc", self.level)
 
   def test_expands_dimensions(self):
     key = core.Key(offsets={"time": 0, "level": 0})
 
-    for i, (index, _) in enumerate(self.PATTERN.items()):
+    for i, (index, _) in enumerate(self.pattern.items()):
       actual = _expand_dimensions_by_key(
-        self.TEST_DATA, key, index, self.PATTERN
+        self.test_data, key, index, self.pattern
       )
 
-      expected_dims = dict(self.TEST_DATA.dims)
+      expected_dims = dict(self.test_data.dims)
       expected_dims.update({"level": 1})
 
       self.assertEqual(expected_dims, dict(actual.dims))
-      self.assertEqual(np.array([self.LEVEL.keys[i]]), actual["level"])
+      self.assertEqual(np.array([self.level.keys[i]]), actual["level"])
 
   def test_raises_error_when_dataset_is_not_found(self):
     key = core.Key({"time": 0, "boat": 0})
     index = (0,)
-    with self.assertRaises(ValueError) as e:
+    with self.assertRaisesRegex(ValueError, "boat") as e:
       _expand_dimensions_by_key(
-        self.TEST_DATA, key, index, self.PATTERN
+        self.test_data, key, index, self.pattern
       )
-    self.assertIn("boat", e.exception.args[0])
 
 
 class FilePatternToChunksTest(test_util.TestCase):
-  TEST_DATA = test_util.dummy_era5_surface_dataset()
+
+  def setUp(self):
+    self.test_data = test_util.dummy_era5_surface_dataset()
 
   @contextlib.contextmanager
-  def pattern_from_testdata(self, test_data=None) -> FilePattern:
+  def pattern_from_testdata(self) -> FilePattern:
     """Produces a FilePattern for a temporary NetCDF file of test data."""
-    if test_data is None:
-      test_data = self.TEST_DATA
-
-    try:
-      with tempfile.TemporaryDirectory() as tmpdir:
-        target = f'{tmpdir}/era5.nc'
-        test_data.to_netcdf(target)
-        yield FilePattern(lambda: target)
-    finally:
-      pass
+    with tempfile.TemporaryDirectory() as tmpdir:
+      target = f'{tmpdir}/era5.nc'
+      self.test_data.to_netcdf(target)
+      yield FilePattern(lambda: target)
 
   @contextlib.contextmanager
   def multifile_pattern(
@@ -79,26 +78,21 @@ class FilePatternToChunksTest(test_util.TestCase):
       longitude_step: int = 47
   ) -> FilePattern:
     """Produces a FilePattern for a temporary NetCDF file of test data."""
-    test_data = self.TEST_DATA
-
     time_dim = ConcatDim('time', list(range(0, 360 * 4, time_step)))
     longitude_dim = ConcatDim('longitude', list(range(0, 144, longitude_step)))
 
-    try:
-      with tempfile.TemporaryDirectory() as tmpdir:
-        def make_path(time: int, longitude: int) -> str:
-          return f'{tmpdir}/era5-{time}-{longitude}.nc'
+    with tempfile.TemporaryDirectory() as tmpdir:
+      def make_path(time: int, longitude: int) -> str:
+        return f'{tmpdir}/era5-{time}-{longitude}.nc'
 
-        for time in time_dim.keys:
-          for long in longitude_dim.keys:
-            chunk = test_data.isel(
-              time=slice(time, time + time_step),
-              longitude=slice(long, long + longitude_step)
-            )
-            chunk.to_netcdf(make_path(time, long))
-        yield FilePattern(make_path, time_dim, longitude_dim)
-    finally:
-      pass
+      for time in time_dim.keys:
+        for long in longitude_dim.keys:
+          chunk = self.test_data.isel(
+            time=slice(time, time + time_step),
+            longitude=slice(long, long + longitude_step)
+          )
+          chunk.to_netcdf(make_path(time, long))
+      yield FilePattern(make_path, time_dim, longitude_dim)
 
   def test_prechunk_converts_correctly(self):
     pattern = FilePattern(
@@ -109,7 +103,7 @@ class FilePatternToChunksTest(test_util.TestCase):
     transform = FilePatternToChunks(pattern)
 
     expected = [core.Key({"time": i}) for i in range(0, 30)]
-    actual = [key for key, _ in transform._prechunk()]
+    actual = [key for key, *_ in transform._prechunk()]
 
     self.assertEqual(expected, actual)
 
@@ -124,7 +118,7 @@ class FilePatternToChunksTest(test_util.TestCase):
 
     expected = [core.Key({"time": i, "level": j})
                 for i, j in itertools.product(range(30), range(5))]
-    actual = [key for key, _ in transform._prechunk()]
+    actual = [key for key, *_ in transform._prechunk()]
 
     self.assertEqual(expected, actual)
 
@@ -139,27 +133,26 @@ class FilePatternToChunksTest(test_util.TestCase):
 
     expected = [core.Key({"time": i, "level": j})
                 for i, j in itertools.product(range(0, 30 * 24, 24), range(5))]
-    actual = [key for key, _ in transform._prechunk()]
+    actual = [key for key, *_ in transform._prechunk()]
 
     self.assertEqual(expected, actual)
 
   def test_no_subchunks_returns_single_dataset(self):
-    expected = [(core.Key(_zero_dimensions(self.TEST_DATA)), self.TEST_DATA)]
+    expected = [(core.Key({"time": 0, "latitude": 0, "longitude": 0}),
+                 self.test_data)]
     with self.pattern_from_testdata() as pattern:
       actual = test_util.EagerPipeline() | FilePatternToChunks(pattern)
 
     self.assertIdenticalChunks(actual, expected)
 
   def test_single_subchunks_returns_multiple_datasets(self):
-    base_key = core.Key(_zero_dimensions(self.TEST_DATA))
-
     with self.pattern_from_testdata() as pattern:
       result = (
           test_util.EagerPipeline()
           | FilePatternToChunks(pattern, sub_chunks={"longitude": 48})
       )
 
-    expected_keys = [base_key.with_offsets(longitude=i)
+    expected_keys = [core.Key({"time": 0, "latitude": 0, "longitude": i})
                      for i in range(0, 144, 48)]
     expected_sizes = [{"time": 365 * 4, "latitude": 73, "longitude": 48}
                       for _ in range(3)]
@@ -170,8 +163,6 @@ class FilePatternToChunksTest(test_util.TestCase):
     self.assertEqual(expected_sizes, actual_sizes)
 
   def test_multiple_subchunks_returns_multiple_datasets(self):
-    base_key = core.Key(_zero_dimensions(self.TEST_DATA))
-
     with self.pattern_from_testdata() as pattern:
       result = (
           test_util.EagerPipeline()
@@ -180,7 +171,7 @@ class FilePatternToChunksTest(test_util.TestCase):
       )
 
     expected_keys = [
-      base_key.with_offsets(longitude=o, latitude=a)
+      core.Key({"time": 0, "latitude": a, "longitude": o})
       for o, a in itertools.product(range(0, 144, 48), range(0, 73, 24))
     ]
     expected_sizes = [
@@ -194,8 +185,6 @@ class FilePatternToChunksTest(test_util.TestCase):
     self.assertEqual(expected_sizes, actual_sizes)
 
   def test_single_subchunks_over_multiple_files_returns_multiple_datasets(self):
-    base_key = core.Key(_zero_dimensions(self.TEST_DATA))
-
     with self.multifile_pattern() as pattern:
       result = (
           test_util.EagerPipeline()
@@ -203,7 +192,7 @@ class FilePatternToChunksTest(test_util.TestCase):
       )
 
     expected_keys = [
-      base_key.with_offsets(latitude=a, longitude=o, time=t)
+      core.Key({"time": t, "latitude": a, "longitude": o})
       for t, o, a in itertools.product(range(4), range(4), range(0, 73, 24))
     ]
     expected_sizes = [

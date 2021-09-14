@@ -13,19 +13,19 @@
 # limitations under the License.
 """IO with Pangeo-Forge."""
 from typing import (
-  Dict,
-  Iterator,
-  Optional,
-  Mapping,
-  Tuple,
-  cast,
+    Dict,
+    Iterator,
+    Optional,
+    Mapping,
+    Tuple,
+    cast,
 )
 
 import apache_beam as beam
 import xarray
 from apache_beam.io.filesystems import FileSystems
 
-from xarray_beam._src import core
+from xarray_beam._src import core, rechunk
 
 
 def _zero_dimensions(dataset: xarray.Dataset) -> Mapping[str, int]:
@@ -89,62 +89,53 @@ class FilePatternToChunks(beam.PTransform):
     self.sub_chunks = sub_chunks or -1
     self.xarray_open_kwargs = xarray_open_kwargs or {}
 
-  def _prechunk(self) -> Iterator[Tuple[core.Key, Tuple[int, ...]]]:
+    if pattern.merge_dims:
+      raise ValueError("patters with `MergeDim`s are not supported.")
+
+  def _prechunk(self) -> Iterator[Tuple[core.Key, Tuple[int, ...], str]]:
     """Converts `FilePattern` items into keyed indexes."""
-    input_chunks = {k: v or 1 for k, v in self.pattern.nitems_per_input.items()}
+    # Default to 1 chunk per item, even though there may be more on reading.
+    # We discover the actual items-per-input in the _open_chunks() phase.
+    initial_chunks = {k: v or 1
+                      for k, v in self.pattern.nitems_per_input.items()}
     dim_sizes = {
       k: v or self.pattern.dims[k]
       for k, v, in self.pattern.concat_sequence_lens.items()
     }
-    chunks = core.normalize_expanded_chunks(input_chunks, dim_sizes)
-    for key, (index, _) in zip(core.iter_chunk_keys(chunks),
-                               self.pattern.items()):
-      yield key, index
+    chunks = core.normalize_expanded_chunks(initial_chunks, dim_sizes)
+    for key, (index, path) in zip(core.iter_chunk_keys(chunks),
+                                  self.pattern.items()):
+      yield key, index, path
 
-  def _open_chunks(
-      self,
-      key: core.Key,
-      index: Tuple[int, ...]
-  ) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+  def _open_chunks(self, _) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
     """Open datasets into chunks with XArray."""
-    path = self.pattern[index]
-    with FileSystems().open(path) as file:
-      dataset = xarray.open_dataset(
-        file, chunks=self.sub_chunks, **self.xarray_open_kwargs
-      )
-      dataset = _expand_dimensions_by_key(dataset, key, index, self.pattern)
-
-      base_key = core.Key(_zero_dimensions(dataset)).with_offsets(**key.offsets)
-
-      num_threads = len(dataset.data_vars)
-
-      if self.sub_chunks == -1:
-        yield base_key, dataset.compute(num_workers=num_threads)
-        return
-
-      dim_sizes = {dim: dataset.dims[dim] for dim in self.sub_chunks.keys()}
-      norm_sub_chunks = core.normalize_expanded_chunks(
-        self.sub_chunks, cast(Mapping[str, int], dim_sizes)
-      )
-      offset_index = core.compute_offset_index(
-        core._chunks_to_offsets(norm_sub_chunks)
-      )
-      for sub_key in core.iter_chunk_keys(norm_sub_chunks):
-        sizes = {
-          dim: norm_sub_chunks[dim][offset_index[dim][offset]]
-          for dim, offset in sub_key.offsets.items()
-        }
-        slices = core.offsets_to_slices(
-          sub_key.offsets, sizes=sizes, base=base_key.offsets
+    for index, path in self.pattern.items():
+      with FileSystems().open(path) as file:
+        key = core.Key(index)
+        base_key = core.Key(_zero_dimensions(dataset)).with_offsets(
+          **key.offsets
         )
-        chunk = dataset.isel(slices)
 
-        new_key = base_key.with_offsets(**sub_key.offsets)
-        yield new_key, chunk.chunk().compute(num_workers=num_threads)
+        dataset = xarray.open_dataset(
+          file, chunks=self.sub_chunks, **self.xarray_open_kwargs
+        )
+        dataset = _expand_dimensions_by_key(dataset, key, index, self.pattern)
+
+
+        num_threads = len(dataset.data_vars)
+
+        if self.sub_chunks == -1:
+          yield base_key, dataset.compute(num_workers=num_threads)
+          return
+
+        for new_key, chunk in rechunk.split_chunks(base_key, dataset,
+                                                   self.sub_chunks):
+          yield new_key, chunk.compute(num_workers=num_threads)
 
   def expand(self, pcoll):
     return (
         pcoll
-        | beam.Create(self._prechunk())
-        | beam.FlatMapTuple(self._open_chunks)
+        | beam.Create([None])
+        | beam.FlatMap(self._open_chunks)
     )
+
