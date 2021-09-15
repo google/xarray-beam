@@ -24,8 +24,8 @@ from pangeo_forge_recipes.patterns import FilePattern, ConcatDim, DimIndex, \
 from xarray_beam._src import core
 from xarray_beam._src import test_util
 from xarray_beam._src.pangeo_forge import (
-    FilePatternToChunks,
-    _expand_dimensions_by_key
+  FilePatternToChunks,
+  _expand_dimensions_by_key
 )
 
 

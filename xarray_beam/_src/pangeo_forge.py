@@ -139,5 +139,3 @@ class FilePatternToChunks(beam.PTransform):
 
   def expand(self, pcoll):
     return pcoll | beam.Create(self._open_chunks)
-
-
