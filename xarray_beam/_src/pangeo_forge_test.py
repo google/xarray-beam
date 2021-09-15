@@ -18,7 +18,8 @@ import itertools
 import tempfile
 
 import numpy as np
-from pangeo_forge_recipes.patterns import FilePattern, ConcatDim
+from pangeo_forge_recipes.patterns import FilePattern, ConcatDim, DimIndex, \
+  CombineOp
 
 from xarray_beam._src import core
 from xarray_beam._src import test_util
@@ -51,7 +52,7 @@ class ExpandDimensionsByKeyTest(test_util.TestCase):
 
   def test_raises_error_when_dataset_is_not_found(self):
     key = core.Key({"time": 0, "boat": 0})
-    index = (0,)
+    index = (DimIndex('time', 0, 1, CombineOp.CONCAT),)
     with self.assertRaisesRegex(ValueError, "boat") as e:
       _expand_dimensions_by_key(
         self.test_data, key, index, self.pattern

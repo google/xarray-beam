@@ -35,13 +35,15 @@ def _zero_dimensions(dataset: xarray.Dataset) -> Mapping[str, int]:
 def _expand_dimensions_by_key(
     dataset: xarray.Dataset,
     key: core.Key,
-    index: Tuple[int, ...],
+    index: 'FilePatternIndex',
     pattern: 'FilePattern'
 ) -> xarray.Dataset:
   """Expand the dimensions of the `Dataset` by offsets found in the `Key`."""
   combine_dims_by_name = {
-    combine_dim.name: (i, combine_dim)
-    for i, combine_dim in enumerate(pattern.combine_dims)
+    combine_dim.name: combine_dim for combine_dim in pattern.combine_dims
+  }
+  index_by_name = {
+    idx.name: idx for idx in index
   }
 
   if not combine_dims_by_name:
@@ -52,22 +54,42 @@ def _expand_dimensions_by_key(
     if dim_key in dataset.dims:
       continue
 
-    dim_idx, combine_dim = combine_dims_by_name.get(dim_key, (-1, None))
-    if dim_idx == -1:
+    try:
+      combine_dim = combine_dims_by_name[dim_key]
+    except KeyError:
       raise ValueError(
         f"could not find CombineDim named {dim_key!r} in pattern {pattern!r}."
       )
 
-    dim_val = combine_dim.keys[index[dim_idx]]
+    dim_val = combine_dim.keys[index_by_name[dim_key].index]
     dataset = dataset.expand_dims(**{dim_key: [dim_val]})
 
   return dataset
 
 
+def _pattern_index_to_key(index: 'FilePatternIndex') -> core.Key:
+  """Translate a `FilePatternIndex` to a `Key`."""
+  from pangeo_forge_recipes.patterns import CombineOp
+
+  offsets = {}
+  for dim in index:
+    if dim.operation is CombineOp.MERGE:
+      raise ValueError("patterns with `MergeDim`s are not supported.")
+    elif dim.operation is CombineOp.CONCAT:
+      offsets[dim.name] = dim.index
+    else:
+      raise ValueError("only concat `CombineOp`s are supported.")
+
+  return core.Key(offsets=offsets)
+
+
 class FilePatternToChunks(beam.PTransform):
   """Open data described by a Pangeo-Forge `FilePattern` into keyed chunks."""
 
-  from pangeo_forge_recipes.patterns import FilePattern
+  from pangeo_forge_recipes.patterns import (
+    FilePattern,
+    FilePatternIndex,
+  )
 
   def __init__(
       self,
@@ -90,7 +112,7 @@ class FilePatternToChunks(beam.PTransform):
     self.xarray_open_kwargs = xarray_open_kwargs or {}
 
     if pattern.merge_dims:
-      raise ValueError("patters with `MergeDim`s are not supported.")
+      raise ValueError("patterns with `MergeDim`s are not supported.")
 
   def _prechunk(self) -> Iterator[Tuple[core.Key, Tuple[int, ...], str]]:
     """Converts `FilePattern` items into keyed indexes."""
@@ -111,16 +133,16 @@ class FilePatternToChunks(beam.PTransform):
     """Open datasets into chunks with XArray."""
     for index, path in self.pattern.items():
       with FileSystems().open(path) as file:
-        key = core.Key(index)
-        base_key = core.Key(_zero_dimensions(dataset)).with_offsets(
-          **key.offsets
-        )
+        key = _pattern_index_to_key(index)
 
         dataset = xarray.open_dataset(
           file, chunks=self.sub_chunks, **self.xarray_open_kwargs
         )
         dataset = _expand_dimensions_by_key(dataset, key, index, self.pattern)
 
+        base_key = core.Key(_zero_dimensions(dataset)).with_offsets(
+          **key.offsets
+        )
 
         num_threads = len(dataset.data_vars)
 
