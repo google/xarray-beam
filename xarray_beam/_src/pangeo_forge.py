@@ -110,7 +110,7 @@ class FilePatternToChunks(beam.PTransform):
     if pattern.merge_dims:
       raise ValueError("patterns with `MergeDim`s are not supported.")
 
-  def _open_chunks(self) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+  def _open_chunks(self, _) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
     """Open datasets into chunks with XArray."""
     for index, path in self.pattern.items():
       with FileSystems().open(path) as file:
@@ -138,4 +138,9 @@ class FilePatternToChunks(beam.PTransform):
           yield new_key, chunk.compute(num_workers=num_threads)
 
   def expand(self, pcoll):
-    return pcoll | beam.Create(self._open_chunks)
+    return (
+        pcoll
+        | beam.Create([None])
+        | beam.FlatMap(self._open_chunks)
+
+    )

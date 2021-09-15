@@ -18,8 +18,12 @@ import itertools
 import tempfile
 
 import numpy as np
-from pangeo_forge_recipes.patterns import FilePattern, ConcatDim, DimIndex, \
+from pangeo_forge_recipes.patterns import (
+  FilePattern,
+  ConcatDim,
+  DimIndex,
   CombineOp
+)
 
 from xarray_beam._src import core
 from xarray_beam._src import test_util
@@ -112,13 +116,14 @@ class FilePatternToChunksTest(test_util.TestCase):
 
     expected_keys = [core.Key({"time": 0, "latitude": 0, "longitude": i})
                      for i in range(0, 144, 48)]
-    expected_sizes = [{"time": 365 * 4, "latitude": 73, "longitude": 48}
-                      for _ in range(3)]
+    expected_datasets = [
+      self.test_data.isel({'longitude': i}) for i in range(0, 144, 48)
+    ]
     actual_keys = [key for key, _ in result]
-    actual_sizes = [dict(ds.sizes) for _, ds in result]
+    actual_datasets = [ds for _, ds in result]
 
     self.assertEqual(expected_keys, actual_keys)
-    self.assertEqual(expected_sizes, actual_sizes)
+    self.assertEqual(expected_datasets, actual_datasets)
 
   def test_multiple_subchunks_returns_multiple_datasets(self):
     with self.pattern_from_testdata() as pattern:
