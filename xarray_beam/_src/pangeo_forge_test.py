@@ -95,49 +95,6 @@ class FilePatternToChunksTest(test_util.TestCase):
           chunk.to_netcdf(make_path(time, long))
       yield FilePattern(make_path, time_dim, longitude_dim)
 
-  def test_prechunk_converts_correctly(self):
-    pattern = FilePattern(
-      lambda time: f"gs://bucket/{time:02d}/{time:02d}.nc",
-      ConcatDim("time", list(range(1, 31))),
-    )
-
-    transform = FilePatternToChunks(pattern)
-
-    expected = [core.Key({"time": i}) for i in range(0, 30)]
-    actual = [key for key, *_ in transform._prechunk()]
-
-    self.assertEqual(expected, actual)
-
-  def test_prechunk_with_two_dims_converts_correctly(self):
-    pattern = FilePattern(
-      lambda time, level: f"gs://bucket/{time:02d}/{level:02d}.nc",
-      ConcatDim("time", list(range(1, 31))),
-      ConcatDim("level", list(range(5))),
-    )
-
-    transform = FilePatternToChunks(pattern)
-
-    expected = [core.Key({"time": i, "level": j})
-                for i, j in itertools.product(range(30), range(5))]
-    actual = [key for key, *_ in transform._prechunk()]
-
-    self.assertEqual(expected, actual)
-
-  def test_prechunk_from_pattern_with_nitemsper_converts_correctly(self):
-    pattern = FilePattern(
-      lambda time, level: f"gs://bucket/{time:02d}/{level:02d}.nc",
-      ConcatDim("time", list(range(1, 31)), nitems_per_file=24),
-      ConcatDim("level", list(range(5))),
-    )
-
-    transform = FilePatternToChunks(pattern)
-
-    expected = [core.Key({"time": i, "level": j})
-                for i, j in itertools.product(range(0, 30 * 24, 24), range(5))]
-    actual = [key for key, *_ in transform._prechunk()]
-
-    self.assertEqual(expected, actual)
-
   def test_no_subchunks_returns_single_dataset(self):
     expected = [(core.Key({"time": 0, "latitude": 0, "longitude": 0}),
                  self.test_data)]

@@ -37,6 +37,7 @@ tests_requires = [
     'pytest',
     'pangeo-forge-recipes',
     'scipy',
+    'h5netcdf'
 ]
 
 setuptools.setup(

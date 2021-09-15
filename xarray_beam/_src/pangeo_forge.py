@@ -13,12 +13,11 @@
 # limitations under the License.
 """IO with Pangeo-Forge."""
 from typing import (
-    Dict,
-    Iterator,
-    Optional,
-    Mapping,
-    Tuple,
-    cast,
+  Dict,
+  Iterator,
+  Optional,
+  Mapping,
+  Tuple,
 )
 
 import apache_beam as beam
@@ -86,10 +85,7 @@ def _pattern_index_to_key(index: 'FilePatternIndex') -> core.Key:
 class FilePatternToChunks(beam.PTransform):
   """Open data described by a Pangeo-Forge `FilePattern` into keyed chunks."""
 
-  from pangeo_forge_recipes.patterns import (
-    FilePattern,
-    FilePatternIndex,
-  )
+  from pangeo_forge_recipes.patterns import FilePattern
 
   def __init__(
       self,
@@ -113,21 +109,6 @@ class FilePatternToChunks(beam.PTransform):
 
     if pattern.merge_dims:
       raise ValueError("patterns with `MergeDim`s are not supported.")
-
-  def _prechunk(self) -> Iterator[Tuple[core.Key, Tuple[int, ...], str]]:
-    """Converts `FilePattern` items into keyed indexes."""
-    # Default to 1 chunk per item, even though there may be more on reading.
-    # We discover the actual items-per-input in the _open_chunks() phase.
-    initial_chunks = {k: v or 1
-                      for k, v in self.pattern.nitems_per_input.items()}
-    dim_sizes = {
-      k: v or self.pattern.dims[k]
-      for k, v, in self.pattern.concat_sequence_lens.items()
-    }
-    chunks = core.normalize_expanded_chunks(initial_chunks, dim_sizes)
-    for key, (index, path) in zip(core.iter_chunk_keys(chunks),
-                                  self.pattern.items()):
-      yield key, index, path
 
   def _open_chunks(self, _) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
     """Open datasets into chunks with XArray."""
