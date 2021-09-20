@@ -104,7 +104,7 @@ class FilePatternToChunksTest(test_util.TestCase):
     with self.pattern_from_testdata() as pattern:
       actual = test_util.EagerPipeline() | FilePatternToChunks(pattern)
 
-    self.assertIdenticalChunks(actual, expected)
+    self.assertAllCloseChunks(actual, expected)
 
   @parameterized.parameters(
     dict(time_step=479, longitude_step=47),
