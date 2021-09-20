@@ -18,6 +18,7 @@ import itertools
 import tempfile
 
 import numpy as np
+from absl.testing import parameterized
 from pangeo_forge_recipes.patterns import (
   FilePattern,
   ConcatDim,
@@ -99,73 +100,35 @@ class FilePatternToChunksTest(test_util.TestCase):
           chunk.to_netcdf(make_path(time, long))
       yield FilePattern(make_path, time_dim, longitude_dim)
 
-  def test_no_subchunks_returns_single_dataset(self):
-    expected = [(core.Key({"time": 0, "latitude": 0, "longitude": 0}),
-                 self.test_data)]
+  def test_returns_single_dataset(self):
+    expected = [
+      (core.Key({"time": 0, "latitude": 0, "longitude": 0}), self.test_data)
+    ]
     with self.pattern_from_testdata() as pattern:
       actual = test_util.EagerPipeline() | FilePatternToChunks(pattern)
 
     self.assertIdenticalChunks(actual, expected)
 
-  def test_single_subchunks_returns_multiple_datasets(self):
-    with self.pattern_from_testdata() as pattern:
-      result = (
-          test_util.EagerPipeline()
-          | FilePatternToChunks(pattern, sub_chunks={"longitude": 48})
+  @parameterized.parameters(
+    dict(time_step=479, longitude_step=47),
+    dict(time_step=365, longitude_step=72),
+    dict(time_step=292, longitude_step=71),
+    dict(time_step=291, longitude_step=48),
+  )
+  def test_returns_multiple_datasets(self, time_step: int, longitude_step: int):
+    expected = [
+      (
+        core.Key({"time": t, "latitude": 0, "longitude": o}),
+        self.test_data.isel(
+          time=slice(t, t + time_step),
+          longitude=slice(o, o + longitude_step)
+        )
+      ) for t, o in itertools.product(
+        range(0, 360 * 4, time_step),
+        range(0, 144, longitude_step)
       )
-
-    expected_keys = [core.Key({"time": 0, "latitude": 0, "longitude": i})
-                     for i in range(0, 144, 48)]
-    expected_datasets = [
-      self.test_data.isel({'longitude': i}) for i in range(0, 144, 48)
     ]
-    actual_keys = [key for key, _ in result]
-    actual_datasets = [ds for _, ds in result]
+    with self.multifile_pattern(time_step, longitude_step) as pattern:
+      actual = test_util.EagerPipeline() | FilePatternToChunks(pattern)
 
-    self.assertEqual(expected_keys, actual_keys)
-    self.assertEqual(expected_datasets, actual_datasets)
-
-  def test_multiple_subchunks_returns_multiple_datasets(self):
-    with self.pattern_from_testdata() as pattern:
-      result = (
-          test_util.EagerPipeline()
-          | FilePatternToChunks(pattern,
-                                sub_chunks={"longitude": 48, "latitude": 24})
-      )
-
-    expected_keys = [
-      core.Key({"time": 0, "latitude": a, "longitude": o})
-      for o, a in itertools.product(range(0, 144, 48), range(0, 73, 24))
-    ]
-    expected_sizes = [
-      {"time": 365 * 4, "longitude": o, "latitude": a}
-      for o, a, in itertools.product([48, 48, 48], [24, 24, 24, 1])
-    ]
-    actual_keys = [key for key, _ in result]
-    actual_sizes = [dict(ds.sizes) for _, ds in result]
-
-    self.assertEqual(expected_keys, actual_keys)
-    self.assertEqual(expected_sizes, actual_sizes)
-
-  def test_single_subchunks_over_multiple_files_returns_multiple_datasets(self):
-    with self.multifile_pattern() as pattern:
-      result = (
-          test_util.EagerPipeline()
-          | FilePatternToChunks(pattern, sub_chunks={"latitude": 24})
-      )
-
-    expected_keys = [
-      core.Key({"time": t, "latitude": a, "longitude": o})
-      for t, o, a in itertools.product(range(4), range(4), range(0, 73, 24))
-    ]
-    expected_sizes = [
-      {"time": t, "latitude": a, "longitude": o}
-      for t, o, a, in
-      itertools.product([479, 479, 479, 23], [47, 47, 47, 3], [24, 24, 24, 1])
-    ]
-
-    actual_keys = [key for key, _ in result]
-    actual_sizes = [dict(ds.sizes) for _, ds in result]
-
-    self.assertEqual(expected_keys, actual_keys)
-    self.assertEqual(expected_sizes, actual_sizes)
+    self.assertIdenticalChunks(actual, expected)
