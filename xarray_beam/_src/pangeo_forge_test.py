@@ -128,4 +128,4 @@ class FilePatternToChunksTest(test_util.TestCase):
     with self.multifile_pattern(time_step, longitude_step) as pattern:
       actual = test_util.EagerPipeline() | FilePatternToChunks(pattern)
 
-    self.assertIdenticalChunks(actual, expected)
+    self.assertAllCloseChunks(actual, expected)
