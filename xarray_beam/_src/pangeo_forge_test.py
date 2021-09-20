@@ -42,11 +42,9 @@ class ExpandDimensionsByKeyTest(test_util.TestCase):
     self.pattern = FilePattern(lambda level: f"gs://dir/{level}.nc", self.level)
 
   def test_expands_dimensions(self):
-    key = core.Key(offsets={"time": 0, "level": 0})
-
     for i, (index, _) in enumerate(self.pattern.items()):
       actual = _expand_dimensions_by_key(
-        self.test_data, key, index, self.pattern
+        self.test_data, index, self.pattern
       )
 
       expected_dims = dict(self.test_data.dims)
@@ -56,11 +54,10 @@ class ExpandDimensionsByKeyTest(test_util.TestCase):
       self.assertEqual(np.array([self.level.keys[i]]), actual["level"])
 
   def test_raises_error_when_dataset_is_not_found(self):
-    key = core.Key({"time": 0, "boat": 0})
-    index = (DimIndex('time', 0, 1, CombineOp.CONCAT),)
-    with self.assertRaisesRegex(ValueError, "boat") as e:
+    index = (DimIndex('boat', 0, 1, CombineOp.CONCAT),)
+    with self.assertRaisesRegex(ValueError, "boat"):
       _expand_dimensions_by_key(
-        self.test_data, key, index, self.pattern
+        self.test_data, index, self.pattern
       )
 
 
