@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """IO with Pangeo-Forge."""
+import contextlib
 from typing import (
   Dict,
   Iterator,
@@ -21,6 +22,7 @@ from typing import (
 )
 
 import apache_beam as beam
+import fsspec
 import xarray
 from apache_beam.io.filesystems import FileSystems
 
@@ -89,13 +91,33 @@ class FilePatternToChunks(beam.PTransform):
     if pattern.merge_dims:
       raise ValueError("patterns with `MergeDim`s are not supported.")
 
+  @contextlib.contextmanager
+  def _open_dataset(self, path: str) -> xarray.Dataset:
+    """Open as an XArray Dataset, sometimes with local caching."""
+    fs_file = None
+    with FileSystems().open(path) as file:
+      try:
+        dataset = xarray.open_dataset(file, **self.xarray_open_kwargs)
+      except (TypeError, OSError):
+        # The cfgrib engine (and others) may fail with the FileSystems method of
+        # opening with BufferedReaders. Here, we open the data locally to make
+        # it easier to work with XArray.
+        fs_file = fsspec.open_local(f"simplecache::{path}",
+                                    simplecache={'cache_storage': '/tmp/files'})
+        dataset = xarray.open_dataset(fs_file, **self.xarray_open_kwargs)
+
+      yield dataset
+
+      if fs_file:
+        fs_file.close()
+
   def _open_chunks(self, _) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
     """Open datasets into chunks with XArray."""
     max_size_idx = {}
-    for index, path in self.pattern.items():
-      with FileSystems().open(path) as file:
 
-        dataset = xarray.open_dataset(file, **self.xarray_open_kwargs)
+    for index, path in self.pattern.items():
+      with self._open_dataset(path) as dataset:
+
         dataset = _expand_dimensions_by_key(dataset, index, self.pattern)
 
         if not max_size_idx:
@@ -115,4 +137,3 @@ class FilePatternToChunks(beam.PTransform):
         | beam.Create([None])
         | beam.FlatMap(self._open_chunks)
     )
-
