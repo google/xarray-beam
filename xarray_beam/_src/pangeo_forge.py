@@ -99,22 +99,16 @@ class FilePatternToChunks(beam.PTransform):
   @contextlib.contextmanager
   def _open_dataset(self, path: str) -> xarray.Dataset:
     """Open as an XArray Dataset, sometimes with local caching."""
-    fs_file = None
     with FileSystems().open(path) as file:
       try:
-        dataset = xarray.open_dataset(file, **self.xarray_open_kwargs)
+        yield xarray.open_dataset(file, **self.xarray_open_kwargs)
       except (TypeError, OSError):
         # The cfgrib engine (and others) may fail with the FileSystems method of
         # opening with BufferedReaders. Here, we open the data locally to make
         # it easier to work with XArray.
-        fs_file = fsspec.open_local(f"simplecache::{path}",
-                                    simplecache={'cache_storage': '/tmp/files'})
-        dataset = xarray.open_dataset(fs_file, **self.xarray_open_kwargs)
-
-      yield dataset
-
-      if fs_file:
-        fs_file.close()
+        with fsspec.open_local(f"simplecache::{path}",
+                                simplecache={'cache_storage': '/tmp/files'}) as fs_file:
+          yield xarray.open_dataset(fs_file, **self.xarray_open_kwargs)
 
   def _open_chunks(
       self,
