@@ -13,6 +13,7 @@
 # limitations under the License.
 """IO with Pangeo-Forge."""
 import contextlib
+import tempfile
 from typing import (
   Dict,
   Iterator,
@@ -104,11 +105,12 @@ class FilePatternToChunks(beam.PTransform):
   def _open_dataset(self, path: str) -> xarray.Dataset:
     """Open as an XArray Dataset, sometimes with local caching."""
     if self.local_copy:
-      with fsspec.open_local(
+      with tempfile.TemporaryDirectory() as tmpdir:
+        local_file = fsspec.open_local(
           f"simplecache::{path}",
-          simplecache={'cache_storage': '/tmp/files'}
-      ) as fs_file:
-        yield xarray.open_dataset(fs_file, **self.xarray_open_kwargs)
+          simplecache={'cache_storage': tmpdir}
+        )
+        yield xarray.open_dataset(local_file, **self.xarray_open_kwargs)
     else:
       with FileSystems().open(path) as file:
           yield xarray.open_dataset(file, **self.xarray_open_kwargs)
