@@ -78,11 +78,11 @@ class FilePatternToChunks(beam.PTransform):
       pattern: 'FilePattern',
       chunks: Optional[Mapping[str, int]] = None,
       local_copy: bool = False,
+      split_vars: bool = False,
+      num_threads: Optional[int] = None,
       xarray_open_kwargs: Optional[Dict] = None
   ):
     """Initialize FilePatternToChunks.
-
-    TODO(#29): Currently, `MergeDim`s are not supported.
 
     Args:
       pattern: a `FilePattern` describing a dataset.
@@ -90,20 +90,48 @@ class FilePatternToChunks(beam.PTransform):
         transform will return one file per chunk.
       local_copy: Open files from the pattern with local copies instead of a
         buffered reader.
+      split_vars: whether to split the dataset into separate records for each
+        data variables or to keep all data variables together. If the pattern
+        has merge dimensions (and this flag is false), data will be split
+        according to the pattern.
+      num_threads: optional number of Dataset chunks to load in parallel per
+        worker. More threads can increase throughput, but also increases memory
+        usage and makes it harder for Beam runners to shard work. Note that each
+        variable in a Dataset is already loaded in parallel, so this is most
+        useful for Datasets with a small number of variables.
       xarray_open_kwargs: keyword arguments to pass to `xarray.open_dataset()`.
     """
     self.pattern = pattern
     self.chunks = chunks
     self.local_copy = local_copy
+    self.split_vars = split_vars
+    self.num_threads = num_threads
     self.xarray_open_kwargs = xarray_open_kwargs or {}
-    self._max_size_idx = {}
 
-    if pattern.merge_dims:
-      raise ValueError("patterns with `MergeDim`s are not supported.")
+    # cache values so they don't have to be re-computed.
+    self._max_sizes = {}
+    self._concat_dims = pattern.concat_dims
+    self._merge_dims = pattern.merge_dims
+    self._dim_keys_by_name = {
+      dim.name: dim.keys for dim in pattern.combine_dims
+    }
+
+  def _maybe_split_vars(
+      self,
+      key: core.Key,
+      dataset: xarray.Dataset
+  ) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+    """If 'split_vars' is enabled, produce a chunk for every variable."""
+    if not self.split_vars:
+      yield key, dataset
+      return
+
+    for k in dataset:
+      yield key.replace(vars={k}), dataset[[k]]
 
   @contextlib.contextmanager
   def _open_dataset(self, path: str) -> xarray.Dataset:
-    """Open as an XArray Dataset, sometimes with local caching."""
+    """Open as an XArray Dataset, optionally with local caching."""
     if self.local_copy:
       with tempfile.TemporaryDirectory() as tmpdir:
         local_file = fsspec.open_local(
@@ -113,7 +141,7 @@ class FilePatternToChunks(beam.PTransform):
         yield xarray.open_dataset(local_file, **self.xarray_open_kwargs)
     else:
       with FileSystems().open(path) as file:
-          yield xarray.open_dataset(file, **self.xarray_open_kwargs)
+        yield xarray.open_dataset(file, **self.xarray_open_kwargs)
 
   def _open_chunks(
       self,
@@ -125,23 +153,32 @@ class FilePatternToChunks(beam.PTransform):
 
       dataset = _expand_dimensions_by_key(dataset, index, self.pattern)
 
-      if not self._max_size_idx:
-        self._max_size_idx = dataset.sizes
+      if not self._max_sizes:
+        self._max_sizes = dataset.sizes
 
-      base_key = core.Key(_zero_dimensions(dataset)).with_offsets(
-        **{dim.name: self._max_size_idx[dim.name] * dim.index for dim in index}
+      variables = {self._dim_keys_by_name[dim.name][dim.index]
+                   for dim in index if dim.name in self._merge_dims}
+      if not variables:
+        variables = None
+
+      key = core.Key(_zero_dimensions(dataset), variables).with_offsets(
+        **{dim.name: self._max_sizes[dim.name] * dim.index
+           for dim in index if dim.name in self._concat_dims}
       )
 
-      num_threads = len(dataset.data_vars)
+      num_threads = self.num_threads or len(dataset.data_vars)
 
-      # If chunks is not set by the user, treat the dataset as a single chunk.
+      # If 'chunks' is not set by the user, treat the dataset as a single chunk.
       if self.chunks is None:
-        yield base_key, dataset.compute(num_workers=num_threads)
+        yield from self._maybe_split_vars(
+          key, dataset.compute(num_workers=num_threads)
+        )
         return
 
-      for new_key, chunk in rechunk.split_chunks(base_key, dataset,
-                                                 self.chunks):
-        yield new_key, chunk.compute(num_workers=num_threads)
+      for new_key, chunk in rechunk.split_chunks(key, dataset, self.chunks):
+        yield from self._maybe_split_vars(
+          new_key, chunk.compute(num_workers=num_threads)
+        )
 
   def expand(self, pcoll):
     return (
