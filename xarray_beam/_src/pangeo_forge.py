@@ -76,6 +76,7 @@ class FilePatternToChunks(beam.PTransform):
       self,
       pattern: 'FilePattern',
       chunks: Optional[Mapping[str, int]] = None,
+      local_copy: bool = True,
       xarray_open_kwargs: Optional[Dict] = None
   ):
     """Initialize FilePatternToChunks.
@@ -86,10 +87,12 @@ class FilePatternToChunks(beam.PTransform):
       pattern: a `FilePattern` describing a dataset.
       chunks: split each open dataset into smaller chunks. If not set, the
         transform will return one file per chunk.
+      local_copy: allow creating local copies of data found in the file pattern.
       xarray_open_kwargs: keyword arguments to pass to `xarray.open_dataset()`.
     """
     self.pattern = pattern
     self.chunks = chunks
+    self.local_copy = local_copy
     self.xarray_open_kwargs = xarray_open_kwargs or {}
     self._max_size_idx = {}
 
@@ -102,12 +105,18 @@ class FilePatternToChunks(beam.PTransform):
     with FileSystems().open(path) as file:
       try:
         yield xarray.open_dataset(file, **self.xarray_open_kwargs)
-      except (TypeError, OSError):
+      except (TypeError, OSError) as e:
+
+        if not self.local_copy:
+          raise ValueError(f'cannot open {path!r} with buffering.') from e
+
         # The cfgrib engine (and others) may fail with the FileSystems method of
         # opening with BufferedReaders. Here, we open the data locally to make
         # it easier to work with XArray.
-        with fsspec.open_local(f"simplecache::{path}",
-                                simplecache={'cache_storage': '/tmp/files'}) as fs_file:
+        with fsspec.open_local(
+            f"simplecache::{path}",
+            simplecache={'cache_storage': '/tmp/files'}
+        ) as fs_file:
           yield xarray.open_dataset(fs_file, **self.xarray_open_kwargs)
 
   def _open_chunks(
