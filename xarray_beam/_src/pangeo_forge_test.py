@@ -112,7 +112,7 @@ class FilePatternToChunksTest(test_util.TestCase):
     with self.pattern_from_testdata() as pattern:
       result = (
           test_util.EagerPipeline()
-          | FilePatternToChunks(pattern, sub_chunks={"longitude": 48})
+          | FilePatternToChunks(pattern, chunks={"longitude": 48})
       )
 
     expected = [
@@ -129,7 +129,7 @@ class FilePatternToChunksTest(test_util.TestCase):
       result = (
           test_util.EagerPipeline()
           | FilePatternToChunks(pattern,
-                                sub_chunks={"longitude": 48, "latitude": 24})
+                                chunks={"longitude": 48, "latitude": 24})
       )
 
     expected = [
@@ -172,16 +172,16 @@ class FilePatternToChunksTest(test_util.TestCase):
     self.assertAllCloseChunks(actual, expected)
 
   @parameterized.parameters(
-    dict(time_step=365, longitude_step=72, sub_chunks={"latitude": 36}),
-    dict(time_step=365, longitude_step=72, sub_chunks={"longitude": 36}),
+    dict(time_step=365, longitude_step=72, chunks={"latitude": 36}),
+    dict(time_step=365, longitude_step=72, chunks={"longitude": 36}),
     dict(time_step=365, longitude_step=72,
-         sub_chunks={"longitude": 36, "latitude": 66}),
+         chunks={"longitude": 36, "latitude": 66}),
   )
   def test_multiple_datasets_with_subchunks_returns_multiple_datasets(
       self,
       time_step: int,
       longitude_step: int,
-      sub_chunks: Dict[str, int],
+      chunks: Dict[str, int],
   ):
 
     expected = []
@@ -194,12 +194,12 @@ class FilePatternToChunksTest(test_util.TestCase):
             time=slice(t, t + time_step),
             longitude=slice(o, o + longitude_step)
           ),
-          sub_chunks)
+          chunks)
       )
     with self.multifile_pattern(time_step, longitude_step) as pattern:
       actual = test_util.EagerPipeline() | FilePatternToChunks(
         pattern,
-        sub_chunks=sub_chunks
+        chunks=chunks
       )
 
       self.assertAllCloseChunks(actual, expected)

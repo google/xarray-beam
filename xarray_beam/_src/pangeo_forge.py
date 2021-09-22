@@ -75,7 +75,7 @@ class FilePatternToChunks(beam.PTransform):
   def __init__(
       self,
       pattern: 'FilePattern',
-      sub_chunks: Optional[Mapping[str, int]] = None,
+      chunks: Optional[Mapping[str, int]] = None,
       xarray_open_kwargs: Optional[Dict] = None
   ):
     """Initialize FilePatternToChunks.
@@ -84,12 +84,12 @@ class FilePatternToChunks(beam.PTransform):
 
     Args:
       pattern: a `FilePattern` describing a dataset.
-      sub_chunks: split each open dataset into smaller chunks. If not set, the
+      chunks: split each open dataset into smaller chunks. If not set, the
         transform will return one file per chunk.
       xarray_open_kwargs: keyword arguments to pass to `xarray.open_dataset()`.
     """
     self.pattern = pattern
-    self.sub_chunks = sub_chunks
+    self.chunks = chunks
     self.xarray_open_kwargs = xarray_open_kwargs or {}
     self._max_size_idx = {}
 
@@ -135,14 +135,13 @@ class FilePatternToChunks(beam.PTransform):
 
       num_threads = len(dataset.data_vars)
 
-      # If sub_chunks is not set by the user, treat the dataset as a single
-      # chunk.
-      if self.sub_chunks is None:
+      # If chunks is not set by the user, treat the dataset as a single chunk.
+      if self.chunks is None:
         yield base_key, dataset.compute(num_workers=num_threads)
         return
 
       for new_key, chunk in rechunk.split_chunks(base_key, dataset,
-                                                 self.sub_chunks):
+                                                 self.chunks):
         yield new_key, chunk.compute(num_workers=num_threads)
 
   def expand(self, pcoll):
