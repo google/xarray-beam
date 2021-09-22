@@ -76,7 +76,7 @@ class FilePatternToChunks(beam.PTransform):
       self,
       pattern: 'FilePattern',
       chunks: Optional[Mapping[str, int]] = None,
-      local_copy: bool = True,
+      local_copy: bool = False,
       xarray_open_kwargs: Optional[Dict] = None
   ):
     """Initialize FilePatternToChunks.
@@ -87,7 +87,8 @@ class FilePatternToChunks(beam.PTransform):
       pattern: a `FilePattern` describing a dataset.
       chunks: split each open dataset into smaller chunks. If not set, the
         transform will return one file per chunk.
-      local_copy: allow creating local copies of data found in the file pattern.
+      local_copy: Open files from the pattern with local copies instead of a
+        buffered reader.
       xarray_open_kwargs: keyword arguments to pass to `xarray.open_dataset()`.
     """
     self.pattern = pattern
@@ -102,22 +103,15 @@ class FilePatternToChunks(beam.PTransform):
   @contextlib.contextmanager
   def _open_dataset(self, path: str) -> xarray.Dataset:
     """Open as an XArray Dataset, sometimes with local caching."""
-    with FileSystems().open(path) as file:
-      try:
-        yield xarray.open_dataset(file, **self.xarray_open_kwargs)
-      except (TypeError, OSError) as e:
-
-        if not self.local_copy:
-          raise ValueError(f'cannot open {path!r} with buffering.') from e
-
-        # The cfgrib engine (and others) may fail with the FileSystems method of
-        # opening with BufferedReaders. Here, we open the data locally to make
-        # it easier to work with XArray.
-        with fsspec.open_local(
-            f"simplecache::{path}",
-            simplecache={'cache_storage': '/tmp/files'}
-        ) as fs_file:
-          yield xarray.open_dataset(fs_file, **self.xarray_open_kwargs)
+    if self.local_copy:
+      with fsspec.open_local(
+          f"simplecache::{path}",
+          simplecache={'cache_storage': '/tmp/files'}
+      ) as fs_file:
+        yield xarray.open_dataset(fs_file, **self.xarray_open_kwargs)
+    else:
+      with FileSystems().open(path) as file:
+          yield xarray.open_dataset(file, **self.xarray_open_kwargs)
 
   def _open_chunks(
       self,
