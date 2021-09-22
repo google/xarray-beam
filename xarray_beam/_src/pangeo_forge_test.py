@@ -16,6 +16,7 @@
 import contextlib
 import itertools
 import tempfile
+from typing import Dict
 
 import numpy as np
 from absl.testing import parameterized
@@ -26,6 +27,7 @@ from pangeo_forge_recipes.patterns import (
   CombineOp
 )
 
+from xarray_beam import split_chunks
 from xarray_beam._src import core
 from xarray_beam._src import test_util
 from xarray_beam._src.pangeo_forge import (
@@ -106,13 +108,52 @@ class FilePatternToChunksTest(test_util.TestCase):
 
     self.assertAllCloseChunks(actual, expected)
 
+  def test_single_subchunks_returns_multiple_datasets(self):
+    with self.pattern_from_testdata() as pattern:
+      result = (
+          test_util.EagerPipeline()
+          | FilePatternToChunks(pattern, sub_chunks={"longitude": 48})
+      )
+
+    expected = [
+      (
+        core.Key({"time": 0, "latitude": 0, "longitude": i}),
+        self.test_data.isel(longitude=slice(i, i + 48))
+      )
+      for i in range(0, 144, 48)
+    ]
+    self.assertAllCloseChunks(result, expected)
+
+  def test_multiple_subchunks_returns_multiple_datasets(self):
+    with self.pattern_from_testdata() as pattern:
+      result = (
+          test_util.EagerPipeline()
+          | FilePatternToChunks(pattern,
+                                sub_chunks={"longitude": 48, "latitude": 24})
+      )
+
+    expected = [
+      (
+        core.Key({"time": 0, "longitude": o, "latitude": a}),
+        self.test_data.isel(longitude=slice(o, o + 48),
+                            latitude=slice(a, a + 24))
+      )
+      for o, a in itertools.product(range(0, 144, 48), range(0, 73, 24))
+    ]
+
+    self.assertAllCloseChunks(result, expected)
+
   @parameterized.parameters(
     dict(time_step=479, longitude_step=47),
     dict(time_step=365, longitude_step=72),
     dict(time_step=292, longitude_step=71),
     dict(time_step=291, longitude_step=48),
   )
-  def test_returns_multiple_datasets(self, time_step: int, longitude_step: int):
+  def test_multiple_datasets_returns_multiple_datasets(
+      self,
+      time_step: int,
+      longitude_step: int
+  ):
     expected = [
       (
         core.Key({"time": t, "latitude": 0, "longitude": o}),
@@ -129,3 +170,36 @@ class FilePatternToChunksTest(test_util.TestCase):
       actual = test_util.EagerPipeline() | FilePatternToChunks(pattern)
 
     self.assertAllCloseChunks(actual, expected)
+
+  @parameterized.parameters(
+    dict(time_step=365, longitude_step=72, sub_chunks={"latitude": 36}),
+    dict(time_step=365, longitude_step=72, sub_chunks={"longitude": 36}),
+    dict(time_step=365, longitude_step=72,
+         sub_chunks={"longitude": 36, "latitude": 66}),
+  )
+  def test_multiple_datasets_with_subchunks_returns_multiple_datasets(
+      self,
+      time_step: int,
+      longitude_step: int,
+      sub_chunks: Dict[str, int],
+  ):
+
+    expected = []
+    for t, o in itertools.product(range(0, 360 * 4, time_step),
+                                  range(0, 144, longitude_step)):
+      expected.extend(
+        split_chunks(
+          core.Key({"latitude": 0, "longitude": o, "time": t}),
+          self.test_data.isel(
+            time=slice(t, t + time_step),
+            longitude=slice(o, o + longitude_step)
+          ),
+          sub_chunks)
+      )
+    with self.multifile_pattern(time_step, longitude_step) as pattern:
+      actual = test_util.EagerPipeline() | FilePatternToChunks(
+        pattern,
+        sub_chunks=sub_chunks
+      )
+
+      self.assertAllCloseChunks(actual, expected)

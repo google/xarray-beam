@@ -26,7 +26,7 @@ import fsspec
 import xarray
 from apache_beam.io.filesystems import FileSystems
 
-from xarray_beam._src import core
+from xarray_beam._src import core, rechunk
 
 
 def _zero_dimensions(dataset: xarray.Dataset) -> Mapping[str, int]:
@@ -70,11 +70,12 @@ def _expand_dimensions_by_key(
 class FilePatternToChunks(beam.PTransform):
   """Open data described by a Pangeo-Forge `FilePattern` into keyed chunks."""
 
-  from pangeo_forge_recipes.patterns import FilePattern
+  from pangeo_forge_recipes.patterns import FilePattern, FilePatternIndex
 
   def __init__(
       self,
       pattern: 'FilePattern',
+      sub_chunks: Optional[Mapping[str, int]] = None,
       xarray_open_kwargs: Optional[Dict] = None
   ):
     """Initialize FilePatternToChunks.
@@ -83,10 +84,14 @@ class FilePatternToChunks(beam.PTransform):
 
     Args:
       pattern: a `FilePattern` describing a dataset.
+      sub_chunks: split each open dataset into smaller chunks. If not set, the
+        transform will return one file per chunk.
       xarray_open_kwargs: keyword arguments to pass to `xarray.open_dataset()`.
     """
     self.pattern = pattern
+    self.sub_chunks = sub_chunks
     self.xarray_open_kwargs = xarray_open_kwargs or {}
+    self._max_size_idx = {}
 
     if pattern.merge_dims:
       raise ValueError("patterns with `MergeDim`s are not supported.")
@@ -111,29 +116,38 @@ class FilePatternToChunks(beam.PTransform):
       if fs_file:
         fs_file.close()
 
-  def _open_chunks(self, _) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+  def _open_chunks(
+      self,
+      index: 'FilePatternIndex',
+      path: str
+  ) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
     """Open datasets into chunks with XArray."""
-    max_size_idx = {}
+    with self._open_dataset(path) as dataset:
 
-    for index, path in self.pattern.items():
-      with self._open_dataset(path) as dataset:
+      dataset = _expand_dimensions_by_key(dataset, index, self.pattern)
 
-        dataset = _expand_dimensions_by_key(dataset, index, self.pattern)
+      if not self._max_size_idx:
+        self._max_size_idx = dataset.sizes
 
-        if not max_size_idx:
-          max_size_idx = dataset.sizes
+      base_key = core.Key(_zero_dimensions(dataset)).with_offsets(
+        **{dim.name: self._max_size_idx[dim.name] * dim.index for dim in index}
+      )
 
-        base_key = core.Key(_zero_dimensions(dataset)).with_offsets(
-          **{dim.name: max_size_idx[dim.name] * dim.index for dim in index}
-        )
+      num_threads = len(dataset.data_vars)
 
-        num_threads = len(dataset.data_vars)
-
+      # If sub_chunks is not set by the user, treat the dataset as a single
+      # chunk.
+      if self.sub_chunks is None:
         yield base_key, dataset.compute(num_workers=num_threads)
+        return
+
+      for new_key, chunk in rechunk.split_chunks(base_key, dataset,
+                                                 self.sub_chunks):
+        yield new_key, chunk.compute(num_workers=num_threads)
 
   def expand(self, pcoll):
     return (
         pcoll
-        | beam.Create([None])
-        | beam.FlatMap(self._open_chunks)
+        | beam.Create(list(self.pattern.items()))
+        | beam.FlatMapTuple(self._open_chunks)
     )
