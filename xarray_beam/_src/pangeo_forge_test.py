@@ -24,7 +24,8 @@ from pangeo_forge_recipes.patterns import (
   FilePattern,
   ConcatDim,
   DimIndex,
-  CombineOp
+  CombineOp,
+  MergeDim,
 )
 
 from xarray_beam import split_chunks
@@ -99,6 +100,32 @@ class FilePatternToChunksTest(test_util.TestCase):
           chunk.to_netcdf(make_path(time, long))
       yield FilePattern(make_path, time_dim, longitude_dim)
 
+  @contextlib.contextmanager
+  def multivariable_pattern(
+      self,
+      time_step: int = 360,
+      longitude_step: int = 36,
+  ) -> FilePattern:
+    """Produces a FilePattern for a test NetCDF data with a merge dimension."""
+    var_names = ['asn', 'd2m', 'e', 'mn2t']
+    time_dim = ConcatDim('time', list(range(0, 360 * 4, time_step)))
+    longitude_dim = ConcatDim('longitude', list(range(0, 144, longitude_step)))
+    var_dim = MergeDim('variable', list(var_names))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+      def make_path(time: int, longitude: int, variable: str) -> str:
+        return f'{tmpdir}/era5-{time}-{longitude}-{variable}.nc'
+
+      for time in time_dim.keys:
+        for long in longitude_dim.keys:
+          for var in var_names:
+            chunk = self.test_data.isel(
+              time=slice(time, time + time_step),
+              longitude=slice(long, long + longitude_step)
+            )[[var]]
+            chunk.to_netcdf(make_path(time, long, var))
+      yield FilePattern(make_path, time_dim, longitude_dim, var_dim)
+
   def test_returns_single_dataset(self):
     expected = [
       (core.Key({"time": 0, "latitude": 0, "longitude": 0}), self.test_data)
@@ -108,7 +135,20 @@ class FilePatternToChunksTest(test_util.TestCase):
 
     self.assertAllCloseChunks(actual, expected)
 
-  def test_single_subchunks_returns_multiple_datasets(self):
+  def test_single_dataset_with_split_vars_returns_multiple_datasets(self):
+    expected = [
+      (core.Key({"time": 0, "latitude": 0, "longitude": 0}, {'asn'}),
+       self.test_data[['asn']]),
+      (core.Key({"time": 0, "latitude": 0, "longitude": 0}, {'d2m'}),
+       self.test_data[['d2m']]),
+    ]
+    with self.pattern_from_testdata() as pattern:
+      actual = test_util.EagerPipeline() | FilePatternToChunks(pattern,
+                                                               split_vars=True)
+
+    self.assertAllCloseChunks(actual, expected)
+
+  def test_single_chunks_returns_multiple_datasets(self):
     with self.pattern_from_testdata() as pattern:
       result = (
           test_util.EagerPipeline()
@@ -124,7 +164,26 @@ class FilePatternToChunksTest(test_util.TestCase):
     ]
     self.assertAllCloseChunks(result, expected)
 
-  def test_multiple_subchunks_returns_multiple_datasets(self):
+  def test_single_chunks_with_splitvars_returns_multiple_datasets(self):
+    with self.pattern_from_testdata() as pattern:
+      result = (
+          test_util.EagerPipeline()
+          | FilePatternToChunks(pattern,
+                                chunks={"longitude": 48},
+                                split_vars=True)
+      )
+
+    expected = [
+      (
+        core.Key({"time": 0, "latitude": 0, "longitude": i}, {var}),
+        self.test_data.isel(longitude=slice(i, i + 48))[[var]]
+      )
+      for i in range(0, 144, 48)
+      for var in ['asn', 'd2m']
+    ]
+    self.assertAllCloseChunks(result, expected)
+
+  def test_multiple_chunks_returns_multiple_datasets(self):
     with self.pattern_from_testdata() as pattern:
       result = (
           test_util.EagerPipeline()
@@ -177,7 +236,7 @@ class FilePatternToChunksTest(test_util.TestCase):
     dict(time_step=365, longitude_step=72,
          chunks={"longitude": 36, "latitude": 66}),
   )
-  def test_multiple_datasets_with_subchunks_returns_multiple_datasets(
+  def test_multiple_datasets_with_chunks_returns_multiple_datasets(
       self,
       time_step: int,
       longitude_step: int,
@@ -203,3 +262,79 @@ class FilePatternToChunksTest(test_util.TestCase):
       )
 
       self.assertAllCloseChunks(actual, expected)
+
+  def test_multiple_datasets_with_chunks_and_splitvars_returns_datasets(self):
+    time_step = 365
+    longitude_step = 72
+    chunks = {"latitude": 36}
+
+    expected = []
+    for t, o in itertools.product(range(0, 360 * 4, time_step),
+                                  range(0, 144, longitude_step)):
+
+      for key, ds in split_chunks(
+          core.Key({"latitude": 0, "longitude": o, "time": t}),
+          self.test_data.isel(
+            time=slice(t, t + time_step),
+            longitude=slice(o, o + longitude_step)
+          ),
+          chunks
+      ):
+        for var in ['asn', 'd2m']:
+          expected.append((key.replace(vars={var}), ds[[var]]))
+
+    with self.multifile_pattern(time_step, longitude_step) as pattern:
+      actual = test_util.EagerPipeline() | FilePatternToChunks(
+        pattern,
+        chunks=chunks,
+        split_vars=True,
+      )
+
+      self.assertAllCloseChunks(actual, expected)
+
+  def test_multivar_datasets_returns_multiple_datasets(self):
+    self.test_data = test_util.dummy_era5_surface_dataset(4)
+    time_step = 360
+    longitude_step = 36
+    expected = [
+      (
+        core.Key({"time": t, "latitude": 0, "longitude": o}, {var}),
+        self.test_data.isel(
+          time=slice(t, t + time_step),
+          longitude=slice(o, o + longitude_step)
+        )[[var]]
+      ) for t, o in itertools.product(
+        range(0, 360 * 4, time_step),
+        range(0, 144, longitude_step)
+      ) for var in ['asn', 'd2m', 'e', 'mn2t']
+    ]
+    with self.multivariable_pattern(time_step, longitude_step) as pattern:
+      actual = test_util.EagerPipeline() | FilePatternToChunks(pattern)
+
+    self.assertAllCloseChunks(actual, expected)
+
+  def test_multivar_datasets_with_chunks_returns_multiple_datasets(self):
+    self.test_data = test_util.dummy_era5_surface_dataset(4)
+    time_step = 360
+    longitude_step = 36
+    chunks = {"latitude": 36, "time": 36}
+
+    expected = []
+    for t, o in itertools.product(range(0, 360 * 4, time_step),
+                                  range(0, 144, longitude_step)):
+      for var in ['asn', 'd2m', 'e', 'mn2t']:
+        for key, ds in split_chunks(
+            core.Key({"latitude": 0, "longitude": o, "time": t}),
+            self.test_data.isel(
+              time=slice(t, t + time_step),
+              longitude=slice(o, o + longitude_step)
+            ),
+            chunks
+        ):
+          expected.append((key.replace(vars={var}), ds[[var]]))
+
+    with self.multivariable_pattern(time_step, longitude_step) as pattern:
+      actual = test_util.EagerPipeline() | FilePatternToChunks(pattern,
+                                                               chunks=chunks)
+
+    self.assertAllCloseChunks(actual, expected)

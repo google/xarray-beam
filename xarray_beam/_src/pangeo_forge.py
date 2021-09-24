@@ -151,7 +151,12 @@ class FilePatternToChunks(beam.PTransform):
     """Open datasets into chunks with XArray."""
     with self._open_dataset(path) as dataset:
 
-      dataset = _expand_dimensions_by_key(dataset, index, self.pattern)
+      # We only want to expand the concat dimensions of the dataset.
+      dataset = _expand_dimensions_by_key(
+        dataset,
+        tuple((dim for dim in index if dim.name in self._concat_dims)),
+        self.pattern
+      )
 
       if not self._max_sizes:
         self._max_sizes = dataset.sizes
