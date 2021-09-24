@@ -106,8 +106,10 @@ class FilePatternToChunksTest(test_util.TestCase):
       time_step: int = 360,
       longitude_step: int = 36,
   ) -> FilePattern:
-    """Produces a FilePattern for a test NetCDF data with a merge dimension."""
+    """Produces a FilePattern for test NetCDF data with a merge dimension."""
     var_names = ['asn', 'd2m', 'e', 'mn2t']
+    assert len(self.test_data.data_vars) == 4, ('test_data not set up properly '
+                                                'for current test!')
     time_dim = ConcatDim('time', list(range(0, 360 * 4, time_step)))
     longitude_dim = ConcatDim('longitude', list(range(0, 144, longitude_step)))
     var_dim = MergeDim('variable', list(var_names))
