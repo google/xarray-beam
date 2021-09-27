@@ -154,7 +154,7 @@ class FilePatternToChunks(beam.PTransform):
       # We only want to expand the concat dimensions of the dataset.
       dataset = _expand_dimensions_by_key(
         dataset,
-        tuple((dim for dim in index if dim.name in self._concat_dims)),
+        tuple(dim for dim in index if dim.name in self._concat_dims),
         self.pattern
       )
 
