@@ -23,7 +23,7 @@ from typing import (
 )
 
 import apache_beam as beam
-import fsspec
+import shutil
 import xarray
 from apache_beam.io.filesystems import FileSystems
 
@@ -132,16 +132,15 @@ class FilePatternToChunks(beam.PTransform):
   @contextlib.contextmanager
   def _open_dataset(self, path: str) -> xarray.Dataset:
     """Open as an XArray Dataset, optionally with local caching."""
-    if self.local_copy:
-      with tempfile.TemporaryDirectory() as tmpdir:
-        local_file = fsspec.open_local(
-          f"simplecache::{path}",
-          simplecache={'cache_storage': tmpdir}
-        )
-        yield xarray.open_dataset(local_file, **self.xarray_open_kwargs)
-    else:
-      with FileSystems().open(path) as file:
-        yield xarray.open_dataset(file, **self.xarray_open_kwargs)
+    with FileSystems().open(path) as file:
+      if self.local_copy:
+        with tempfile.NamedTemporaryFile('wb') as local_file:
+          shutil.copyfileobj(file, local_file)
+          local_file.flush()
+          yield xarray.open_dataset(local_file.name, **self.xarray_open_kwargs)
+          return
+
+      yield xarray.open_dataset(file, **self.xarray_open_kwargs)
 
   def _open_chunks(
       self,
