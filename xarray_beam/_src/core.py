@@ -176,10 +176,10 @@ def offsets_to_slices(
   if base is None:
     base = {}
   slices = {}
-  for k in offsets.keys():
-    if k not in sizes:
-      raise ValueError(f"An offset was specified for dimension {k}, but we don't "
-                       "have a chunk size for this dimension.")
+  missing_chunk_sizes = [k for k in offsets.keys() if k not in sizes]
+  if missing_chunk_sizes:
+    raise ValueError("The following dimensions have offsets specified but we"
+                     f" don't have chunk sizes for them: {missing_chunk_sizes}")
   for k, size in sizes.items():
     offset = offsets.get(k, 0) - base.get(k, 0)
     slices[k] = slice(offset, offset + size, 1)
