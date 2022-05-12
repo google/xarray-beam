@@ -289,13 +289,15 @@ class DatasetToChunks(beam.PTransform):
     self.num_threads = num_threads
     self.offset_index = compute_offset_index(_chunks_to_offsets(chunks))
 
-  def _key_to_chunks(self, key: Key) -> Iterator[Tuple[Key, xarray.Dataset]]:
+  def _key_to_chunks(self, key: Key, ds: Optional[xarray.Dataset] = None) -> Iterator[Tuple[Key, xarray.Dataset]]:
     sizes = {
         dim: self.chunks[dim][self.offset_index[dim][offset]]
         for dim, offset in key.offsets.items()
     }
     slices = offsets_to_slices(key.offsets, sizes)
-    chunk = self.dataset.isel(slices)
+    if ds is None:
+      ds = self.dataset
+    chunk = ds.isel(slices)
     # Load the data, using a separate thread for each variable
     num_threads = len(self.dataset.data_vars)
     result = chunk.chunk().compute(num_workers=num_threads)
