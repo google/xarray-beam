@@ -1,7 +1,9 @@
 # doc requirements
+jinja2==3.0.3
 myst-nb==0.12.3
 myst-parser==0.13.7
-sphinx_rtd_theme
+sphinx_rtd_theme==1.0.0
+sphinx==3.5.4
 scipy==1.7.1
 
 # xarray-beam requirements

@@ -42,7 +42,7 @@ tests_requires = [
 
 setuptools.setup(
     name='xarray-beam',
-    version='0.2.0 ',
+    version='0.3.0 ',
     license='Apache 2.0',
     author='Google LLC',
     author_email='noreply@google.com',
