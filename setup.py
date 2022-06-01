@@ -52,6 +52,6 @@ setuptools.setup(
         'docs': docs_requires,
     },
     url='https://github.com/google/xarray-beam',
-    packages=setuptools.find_packages(),
+    packages=setuptools.find_packages(exclude=["examples"]),
     python_requires='>=3',
 )
