@@ -43,4 +43,4 @@ from xarray_beam._src.zarr import (
 )
 from xarray_beam import Mean
 
-__version__ = '0.3.0'
+__version__ = '0.3.1'
