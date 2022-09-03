@@ -140,14 +140,13 @@ class DatasetToZarrTest(test_util.TestCase):
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
 
-  def test_dataset_to_zarr(self):
+  def test_dataset_to_zarr_simple(self):
     dataset = xarray.Dataset(
         {'foo': ('x', np.arange(0, 60, 10))},
         coords={'x': np.arange(6)},
         attrs={'meta': 'data'},
     )
     chunked = dataset.chunk({'x': 3})
-
     temp_dir = self.create_tempdir().full_path
     (
         test_util.EagerPipeline()
@@ -156,6 +155,10 @@ class DatasetToZarrTest(test_util.TestCase):
     actual = xarray.open_zarr(temp_dir, consolidated=True)
     xarray.testing.assert_identical(actual, dataset)
 
+  def test_dataset_to_zarr_unchunked(self):
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(0, 60, 10))},
+    )
     temp_dir = self.create_tempdir().full_path
     with self.assertRaisesRegex(
         ValueError,

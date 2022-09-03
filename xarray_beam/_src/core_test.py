@@ -14,6 +14,7 @@
 """Tests for xarray_beam._src.core."""
 
 from absl.testing import absltest
+from absl.testing import parameterized
 import apache_beam as beam
 import immutabledict
 import numpy as np
@@ -32,7 +33,7 @@ class KeyTest(test_util.TestCase):
     key = xbeam.Key({'x': 0, 'y': 10})
     self.assertIsInstance(key.offsets, immutabledict.immutabledict)
     self.assertEqual(dict(key.offsets), {'x': 0, 'y': 10})
-    self.assertEqual(key.vars, None)
+    self.assertIsNone(key.vars)
 
     key = xbeam.Key(vars={'foo'})
     self.assertEqual(dict(key.offsets), {})
@@ -181,7 +182,7 @@ class TestOffsetsToSlices(test_util.TestCase):
 class DatasetToChunksTest(test_util.TestCase):
 
   def test_iter_chunk_keys(self):
-    actual = list(core.iter_chunk_keys({'x': (3, 3), 'y': (2, 2, 2)}))
+    actual = list(core.iter_chunk_keys({'x': (0, 3), 'y': (0, 2, 4)}))
     expected = [
         xbeam.Key({'x': 0, 'y': 0}),
         xbeam.Key({'x': 0, 'y': 2}),
@@ -248,6 +249,12 @@ class DatasetToChunksTest(test_util.TestCase):
     )
     self.assertIdenticalChunks(actual, expected)
 
+    actual = (
+        test_util.EagerPipeline()
+        | xbeam.DatasetToChunks(dataset.chunk({'x': 3}), shard_keys_threshold=1)
+    )
+    self.assertIdenticalChunks(actual, expected)
+
   def test_dataset_to_chunks_whole(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
     expected = [(xbeam.Key({'x': 0}), dataset)]
@@ -261,6 +268,7 @@ class DatasetToChunksTest(test_util.TestCase):
         test_util.EagerPipeline()
         | xbeam.DatasetToChunks(dataset, chunks={})
     )
+    expected = [(xbeam.Key({'x': 0}), dataset)]
     self.assertIdenticalChunks(actual, expected)
 
   def test_dataset_to_chunks_vars(self):
@@ -280,6 +288,65 @@ class DatasetToChunksTest(test_util.TestCase):
     )
     self.assertIdenticalChunks(actual, expected)
 
+  @parameterized.parameters(
+      {'shard_keys_threshold': 1},
+      {'shard_keys_threshold': 2},
+      {'shard_keys_threshold': 10},
+  )
+  def test_dataset_to_chunks_split_with_different_dims(
+      self, shard_keys_threshold
+  ):
+    dataset = xarray.Dataset({
+        'foo': (('x', 'y'), np.array([[1, 2, 3], [4, 5, 6]])),
+        'bar': ('x', np.array([1, 2])),
+        'baz': ('z', np.array([1, 2, 3])),
+    })
+    expected = [
+        (xbeam.Key({'x': 0, 'y': 0}, {'foo'}), dataset[['foo']].head(x=1)),
+        (xbeam.Key({'x': 0}, {'bar'}), dataset[['bar']].head(x=1)),
+        (xbeam.Key({'x': 1, 'y': 0}, {'foo'}), dataset[['foo']].tail(x=1)),
+        (xbeam.Key({'x': 1}, {'bar'}), dataset[['bar']].tail(x=1)),
+        (xbeam.Key({'z': 0}, {'baz'}), dataset[['baz']]),
+    ]
+    actual = (
+        test_util.EagerPipeline()
+        | xbeam.DatasetToChunks(
+            dataset,
+            chunks={'x': 1},
+            split_vars=True,
+            shard_keys_threshold=shard_keys_threshold,
+        )
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_dataset_to_chunks_empty(self):
+    dataset = xarray.Dataset()
+    expected = [(xbeam.Key({}), dataset)]
+    actual = (
+        test_util.EagerPipeline()
+        | xbeam.DatasetToChunks(dataset)
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_task_count(self):
+    dataset = xarray.Dataset({
+        'foo': (('x', 'y'), np.zeros((3, 6))),
+        'bar': ('x', np.zeros(3)),
+        'baz': ('z', np.zeros(10)),
+    })
+
+    to_chunks = xbeam.DatasetToChunks(dataset, chunks={'x': 1})
+    self.assertEqual(to_chunks._task_count(), 3)
+
+    to_chunks = xbeam.DatasetToChunks(dataset, chunks={'x': 1}, split_vars=True)
+    self.assertEqual(to_chunks._task_count(), 7)
+
+    to_chunks = xbeam.DatasetToChunks(dataset, chunks={'y': 1}, split_vars=True)
+    self.assertEqual(to_chunks._task_count(), 8)
+
+    to_chunks = xbeam.DatasetToChunks(dataset, chunks={'z': 1}, split_vars=True)
+    self.assertEqual(to_chunks._task_count(), 12)
+
 
 class ValidateEachChunkTest(test_util.TestCase):
 
@@ -287,13 +354,13 @@ class ValidateEachChunkTest(test_util.TestCase):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
     with self.assertRaises(ValueError) as e:
       (
-        [(xbeam.Key({'x': 0, 'y': 0}), dataset)]
-        | xbeam.ValidateEachChunk()
+          [(xbeam.Key({'x': 0, 'y': 0}), dataset)]
+          | xbeam.ValidateEachChunk()
       )
     self.assertIn(
-      "Key offset(s) 'y' in Key(offsets={'x': 0, 'y': 0}, vars=None) not found in "
-      "Dataset dimensions",
-      e.exception.args[0]
+        "Key offset(s) 'y' in Key(offsets={'x': 0, 'y': 0}, vars=None) not "
+        "found in Dataset dimensions",
+        e.exception.args[0]
     )
 
   def test_unmatched_variables_raises_error(self):
@@ -304,9 +371,9 @@ class ValidateEachChunkTest(test_util.TestCase):
           | xbeam.ValidateEachChunk()
       )
     self.assertIn(
-      "Key var(s) 'bar' in Key(offsets={'x': 0}, vars={'bar'}) not found in Dataset "
-      "data variables",
-      e.exception.args[0]
+        "Key var(s) 'bar' in Key(offsets={'x': 0}, vars={'bar'}) not found in "
+        "Dataset data variables",
+        e.exception.args[0]
     )
 
   def test_validate_chunks_compose_in_pipeline(self):

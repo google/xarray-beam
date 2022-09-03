@@ -38,6 +38,18 @@ class IntegrationTest(test_util.TestCase):
           'split_vars': True,
       },
       {
+          'testcase_name': 'eager_unified_sharded',
+          'template_method': 'eager',
+          'split_vars': False,
+          'shard_keys_threshold': 20,
+      },
+      {
+          'testcase_name': 'eager_split_sharded',
+          'template_method': 'eager',
+          'split_vars': True,
+          'shard_keys_threshold': 20,
+      },
+      {
           'testcase_name': 'lazy_unified',
           'template_method': 'lazy',
           'split_vars': False,
@@ -53,7 +65,9 @@ class IntegrationTest(test_util.TestCase):
           'split_vars': True,
       },
   )
-  def test_rechunk_zarr_to_zarr(self, template_method, split_vars):
+  def test_rechunk_zarr_to_zarr(
+      self, template_method, split_vars, shard_keys_threshold=1_000_000,
+  ):
     src_dir = self.create_tempdir('source').full_path
     dest_dir = self.create_tempdir('destination').full_path
 
@@ -83,7 +97,11 @@ class IntegrationTest(test_util.TestCase):
       # run pipeline
       (
           pipeline
-          | xbeam.DatasetToChunks(on_disk, split_vars=split_vars)
+          | xbeam.DatasetToChunks(
+              on_disk,
+              split_vars=split_vars,
+              shard_keys_threshold=shard_keys_threshold,
+          )
           | xbeam.Rechunk(
               on_disk.sizes, source_chunks, target_chunks,
               itemsize=8,
@@ -94,6 +112,59 @@ class IntegrationTest(test_util.TestCase):
     roundtripped = xarray.open_zarr(dest_dir, consolidated=True, chunks=False)
 
     xarray.testing.assert_identical(roundtripped, dataset)
+
+  @parameterized.named_parameters(
+      {
+          'testcase_name': 'unified_unsharded',
+          'split_vars': False,
+          'shard_keys_threshold': 1_000_000,
+      },
+      {
+          'testcase_name': 'split_unsharded',
+          'split_vars': True,
+          'shard_keys_threshold': 1_000_000,
+      },
+      {
+          'testcase_name': 'unified_sharded',
+          'split_vars': False,
+          'shard_keys_threshold': 3,
+      },
+      {
+          'testcase_name': 'split_sharded',
+          'split_vars': True,
+          'shard_keys_threshold': 3,
+      },
+  )
+  def test_dataset_to_zarr_with_irregular_variables(
+      self, split_vars, shard_keys_threshold,
+  ):
+    dataset = xarray.Dataset(
+        {
+            'volume1': (
+                ('t', 'x', 'y', 'z1'), np.arange(240).reshape(10, 2, 3, 4)
+            ),
+            'volume2': (
+                ('t', 'x', 'y', 'z2'), np.arange(300).reshape(10, 2, 3, 5)
+            ),
+            'surface': (('t', 'x', 'y'), np.arange(60).reshape(10, 2, 3)),
+            'static': (('x', 'y'), np.arange(6).reshape(2, 3)),
+        }
+    )
+    temp_dir = self.create_tempdir().full_path
+    template = dataset.chunk()
+    chunks = {'t': 1, 'z1': 2, 'z2': 3}
+    (
+        test_util.EagerPipeline()
+        | xbeam.DatasetToChunks(
+            dataset,
+            chunks,
+            split_vars=split_vars,
+            shard_keys_threshold=shard_keys_threshold,
+        )
+        | xbeam.ChunksToZarr(temp_dir, template, chunks)
+    )
+    actual = xarray.open_zarr(temp_dir, consolidated=True)
+    xarray.testing.assert_identical(actual, dataset)
 
 
 if __name__ == '__main__':

@@ -20,20 +20,21 @@ multi-dimensional labeled arrays, such as:
 For more about our approach and how to get started,
 **[read the documentation](https://xarray-beam.readthedocs.io/)**!
 
-**🚨 Warning: Xarray-Beam is new and unpolished 🚨**
+**Warning: Xarray-Beam is a sharp tool 🔪**
 
-Expect sharp edges 🔪 and performance cliffs 🧗, particularly related to the
-management of lazy data with Dask and reading/writing data with Zarr. We have
-used it to efficiently process ~25 TB datasets. We _expect_ it to scale to PB
-size datasets, but that's easier said than done. We welcome feedback and
-contributions from early adopters, and hope to have it ready for wider audience
-soon.
+Xarray-Beam is relatively new, and focused on expert users:
+
+-   We use it extensively at Google for processing large-scale weather datasets,
+    but there is not yet a vibrant external community.
+-   It provides low-level abstractions that facilitate writing very large
+    scale data pipelines (e.g., 100+ TB), but by design it requires explicitly
+    thinking about how every operation is parallelized.
 
 ## Installation
 
-Xarray-Beam requires recent versions of immutabledict, xarray, dask, rechunker
-and zarr, and the *latest* release of Apache Beam (2.31.0 or later). For best
-performance when writing Zarr files, use Xarray 0.19.0 or later.
+Xarray-Beam requires recent versions of immutabledict, Xarray, Dask, Rechunker,
+Zarr, and Apache Beam. For best performance when writing Zarr files, use Xarray
+0.19.0 or later.
 
 ## Disclaimer
 

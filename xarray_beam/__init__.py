@@ -14,15 +14,15 @@
 """Public API for Xarray-Beam."""
 
 # pylint: disable=g-multiple-import
+from xarray_beam._src.combiners import (
+    MeanCombineFn,
+)
 from xarray_beam._src.core import (
     Key,
     DatasetToChunks,
     ValidateEachChunk,
     offsets_to_slices,
     validate_chunk
-)
-from xarray_beam._src.combiners import (
-    MeanCombineFn,
 )
 from xarray_beam._src.rechunk import (
     ConsolidateChunks,
@@ -43,4 +43,4 @@ from xarray_beam._src.zarr import (
 )
 from xarray_beam import Mean
 
-__version__ = '0.3.1'
+__version__ = '0.4.0'

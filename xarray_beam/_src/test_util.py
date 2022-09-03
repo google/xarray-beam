@@ -52,11 +52,12 @@ class EagerPipeline:
 
 
 class TestCase(parameterized.TestCase):
+  """TestCase for use in internal Xarray-Beam tests."""
 
   def _assert_chunks(self, array_assert_func, actual, expected):
     actual = dict(actual)
     expected = dict(expected)
-    self.assertEqual(list(expected), list(actual), msg='inconsistent keys')
+    self.assertCountEqual(expected, actual, msg='inconsistent keys')
     for key in expected:
       array_assert_func(actual[key], expected[key])
 

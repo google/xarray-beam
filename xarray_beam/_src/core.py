@@ -13,6 +13,7 @@
 # limitations under the License.
 """Core data model for xarray-beam."""
 import itertools
+import math
 from typing import (
     AbstractSet,
     Container,
@@ -196,16 +197,16 @@ def _chunks_to_offsets(
 
 
 def iter_chunk_keys(
-    chunks: Mapping[str, Tuple[int, ...]],
+    offsets: Mapping[str, Sequence[int]],
+    vars: Optional[AbstractSet[str]] = None,  # pylint: disable=redefined-builtin
 ) -> Iterator[Key]:
   """Iterate over the Key objects corresponding to the given chunks."""
-  all_offsets = _chunks_to_offsets(chunks)
-  chunk_indices = [range(len(sizes)) for sizes in chunks.values()]
+  chunk_indices = [range(len(sizes)) for sizes in offsets.values()]
   for indices in itertools.product(*chunk_indices):
-    offsets = {
-        dim: all_offsets[dim][index] for dim, index in zip(chunks, indices)
+    key_offsets = {
+        dim: offsets[dim][index] for dim, index in zip(offsets, indices)
     }
-    yield Key(offsets)
+    yield Key(key_offsets, vars)
 
 
 def compute_offset_index(
@@ -262,6 +263,7 @@ class DatasetToChunks(beam.PTransform):
       chunks: Optional[Mapping[str, Union[int, Tuple[int, ...]]]] = None,
       split_vars: bool = False,
       num_threads: Optional[int] = None,
+      shard_keys_threshold: int = 200_000,
   ):
     """Initialize DatasetToChunks.
 
@@ -271,44 +273,138 @@ class DatasetToChunks(beam.PTransform):
         chunked. If the dataset *is* already chunked with Dask, `chunks` takes
         precedence over the existing chunks.
       split_vars: whether to split the dataset into separate records for each
-        data variables or to keep all data variables together.
+        data variable or to keep all data variables together.
       num_threads: optional number of Dataset chunks to load in parallel per
         worker. More threads can increase throughput, but also increases memory
         usage and makes it harder for Beam runners to shard work. Note that each
         variable in a Dataset is already loaded in parallel, so this is most
         useful for Datasets with a small number of variables.
+      shard_keys_threshold: threshold at which to compute keys on Beam workers,
+        rather than only on the host process. This is important for scaling
+        pipelines to millions of tasks.
     """
     if chunks is None:
       chunks = dataset.chunks
     if chunks is None:
-      raise ValueError('dataset must be chunked or chunks must be set')
-    chunks = normalize_expanded_chunks(chunks, dataset.sizes)
+      raise ValueError('dataset must be chunked or chunks must be provided')
+    expanded_chunks = normalize_expanded_chunks(chunks, dataset.sizes)
     self.dataset = dataset
-    self.chunks = chunks
+    self.expanded_chunks = expanded_chunks
     self.split_vars = split_vars
     self.num_threads = num_threads
-    self.offset_index = compute_offset_index(_chunks_to_offsets(chunks))
+    self.shard_keys_threshold = shard_keys_threshold
+    # TODO(shoyer): consider recalculating these potentially large properties on
+    # each worker, rather than only once on the host.
+    self.offsets = _chunks_to_offsets(expanded_chunks)
+    self.offset_index = compute_offset_index(self.offsets)
+    # We use the simple heuristic of only sharding inputs along the dimension
+    # with the most chunks.
+    lengths = {k: len(v) for k, v in self.offsets.items()}
+    self.sharded_dim = max(lengths, key=lengths.get) if lengths else None
+    self.shard_count = self._shard_count()
+
+  def _task_count(self) -> int:
+    """Count the number of tasks emitted by this transform."""
+    counts = {k: len(v) for k, v in self.expanded_chunks.items()}
+    if not self.split_vars:
+      return int(np.prod(list(counts.values())))
+    total = 0
+    for variable in self.dataset.values():
+      count_list = [v for k, v in counts.items() if k in variable.dims]
+      total += int(np.prod(count_list))
+    return total
+
+  def _shard_count(self) -> Optional[int]:
+    """Determine the number of times to shard input keys."""
+    task_count = self._task_count()
+    if task_count <= self.shard_keys_threshold:
+      return None  # no sharding
+
+    if not self.split_vars:
+      return math.ceil(task_count / self.shard_keys_threshold)
+
+    var_count = sum(
+        self.sharded_dim in var.dims for var in self.dataset.values()
+    )
+    return math.ceil(task_count / (var_count * self.shard_keys_threshold))
+
+  def _iter_all_keys(self) -> Iterator[Key]:
+    """Iterate over all Key objects."""
+    if not self.split_vars:
+      yield from iter_chunk_keys(self.offsets)
+    else:
+      for name, variable in self.dataset.items():
+        relevant_offsets = {
+            k: v for k, v in self.offsets.items() if k in variable.dims
+        }
+        yield from iter_chunk_keys(relevant_offsets, vars={name})
+
+  def _iter_shard_keys(
+      self, shard_id: Optional[int], var_name: Optional[str]
+  ) -> Iterator[Key]:
+    """Iterate over Key objects for a specific shard and variable."""
+    if var_name is None:
+      offsets = self.offsets
+    else:
+      offsets = {
+          dim: self.offsets[dim] for dim in self.dataset[var_name].dims
+      }
+
+    if shard_id is None:
+      assert self.split_vars
+      yield from iter_chunk_keys(offsets, vars={var_name})
+    else:
+      assert self.split_vars == (var_name is not None)
+      dim = self.sharded_dim
+      count = math.ceil(len(self.offsets[dim]) / self.shard_count)
+      dim_slice = slice(shard_id * count, (shard_id + 1) * count)
+      offsets = {**offsets, dim: offsets[dim][dim_slice]}
+      vars_ = {var_name} if self.split_vars else None
+      yield from iter_chunk_keys(offsets, vars=vars_)
+
+  def _shard_inputs(self) -> List[Tuple[Optional[int], Optional[str]]]:
+    """Create inputs for sharded key iterators."""
+    if not self.split_vars:
+      return [(i, None) for i in range(self.shard_count)]
+
+    inputs = []
+    for name, variable in self.dataset.items():
+      if self.sharded_dim in variable.dims:
+        inputs.extend([(i, name) for i in range(self.shard_count)])
+      else:
+        inputs.append((None, name))
+    return inputs
 
   def _key_to_chunks(self, key: Key) -> Iterator[Tuple[Key, xarray.Dataset]]:
+    """Convert a Key into an in-memory (Key, xarray.Dataset) pair."""
     sizes = {
-        dim: self.chunks[dim][self.offset_index[dim][offset]]
+        dim: self.expanded_chunks[dim][self.offset_index[dim][offset]]
         for dim, offset in key.offsets.items()
     }
     slices = offsets_to_slices(key.offsets, sizes)
-    chunk = self.dataset.isel(slices)
+    dataset = self.dataset if key.vars is None else self.dataset[list(key.vars)]
+    chunk = dataset.isel(slices)
     # Load the data, using a separate thread for each variable
-    num_threads = len(self.dataset.data_vars)
+    num_threads = len(self.dataset)
     result = chunk.chunk().compute(num_workers=num_threads)
-    if self.split_vars:
-      for k in result:
-        yield key.replace(vars={k}), result[[k]]
-    else:
-      yield key, result
+    yield key, result
 
   def expand(self, pcoll):
+    if self.shard_count is None:
+      # Create all keys on the machine launching the Beam pipeline. This is
+      # faster if the number of keys is small.
+      key_pcoll = pcoll | beam.Create(self._iter_all_keys())
+    else:
+      # Create keys in separate shards on Beam workers. This is more scalable.
+      key_pcoll = (
+          pcoll
+          | beam.Create(self._shard_inputs())
+          | beam.FlatMapTuple(self._iter_shard_keys)
+          | beam.Reshuffle()
+      )
+
     return (
-        pcoll
-        | beam.Create(iter_chunk_keys(self.chunks))
+        key_pcoll
         | threadmap.FlatThreadMap(
             self._key_to_chunks, num_threads=self.num_threads
         )
