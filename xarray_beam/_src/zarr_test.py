@@ -15,6 +15,7 @@
 """Tests for xarray_beam._src.core."""
 from absl.testing import absltest
 from absl.testing import parameterized
+import dask.array as da
 import numpy as np
 import xarray
 import xarray_beam as xbeam
@@ -26,6 +27,44 @@ from xarray_beam._src import test_util
 
 
 class DatasetToZarrTest(test_util.TestCase):
+
+  def test_open_zarr(self):
+    source_ds = xarray.Dataset(
+        {'foo': ('x', da.arange(0, 60, 10, chunks=2))},
+    )
+    temp_dir = self.create_tempdir().full_path
+    source_ds.to_zarr(temp_dir)
+    roundtripped_ds, chunks = xbeam.open_zarr(temp_dir)
+    xarray.testing.assert_identical(roundtripped_ds, source_ds)
+    self.assertEqual(roundtripped_ds.chunks, {})
+    self.assertEqual(chunks, {'x': 2})
+
+  def test_open_zarr_inconsistent(self):
+    source_ds = xarray.Dataset(
+        {
+            'foo': ('x', da.arange(0, 60, 10, chunks=2)),
+            'bar': ('x', da.arange(0, 60, 10, chunks=3)),
+        },
+    )
+    temp_dir = self.create_tempdir().full_path
+    source_ds.to_zarr(temp_dir)
+    with self.assertRaisesRegex(
+        ValueError,
+        "inconsistent chunk sizes on Zarr dataset for dimension 'x': {2, 3}",
+    ):
+      xbeam.open_zarr(temp_dir)
+
+  def test_make_template(self):
+    source = xarray.Dataset(
+        {
+            'foo': ('x', np.ones(3)),
+            'bar': ('x', np.ones(3)),
+        },
+    )
+    actual = xbeam.make_template(source)
+    expected = source * 0
+    xarray.testing.assert_identical(actual, expected)
+    self.assertEqual(actual.chunks, {'x': (3,)})
 
   def test_chunks_to_zarr(self):
     dataset = xarray.Dataset(
