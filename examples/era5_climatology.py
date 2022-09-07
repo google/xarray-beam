@@ -45,11 +45,7 @@ def rekey_chunk_on_month_hour(
 
 
 def main(argv):
-  # By passing chunks=None, we use Xarray's lazy-loading instead of Dask. This
-  # result is much less data being passed from the launch script to workers.
-  source_dataset = xarray.open_zarr(
-      INPUT_PATH.value, chunks=None, consolidated=True
-  )
+  source_dataset, source_chunks = xbeam.open_zarr(INPUT_PATH.value)
 
   # This lazy "template" allows us to setup the Zarr outputs before running the
   # pipeline. We don't really need to supply a template here because the outputs
@@ -57,8 +53,7 @@ def main(argv):
   # the pipeline slightly more efficient.
   max_month = source_dataset.time.dt.month.max().item()  # normally 12
   template = (
-      source_dataset.chunk()
-      .pipe(xarray.zeros_like)
+      xbeam.make_template(source_dataset)
       .isel(time=0, drop=True)
       .expand_dims(month=np.arange(1, max_month + 1), hour=np.arange(24))
   )
@@ -67,7 +62,7 @@ def main(argv):
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
     (
         root
-        | xbeam.DatasetToChunks(source_dataset, {'time': 31})
+        | xbeam.DatasetToChunks(source_dataset, source_chunks)
         | xbeam.SplitChunks({'time': 1})
         | beam.MapTuple(rekey_chunk_on_month_hour)
         | xbeam.Mean.PerKey()
