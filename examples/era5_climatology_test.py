@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,8 +16,6 @@
 
 from absl.testing import absltest
 from absl.testing import flagsaver
-import numpy as np
-import pandas as pd
 import xarray
 
 from . import era5_climatology
@@ -29,7 +28,7 @@ class Era5ClimatologyTest(test_util.TestCase):
     input_path = self.create_tempdir('source').full_path
     output_path = self.create_tempdir('destination').full_path
 
-    input_ds = test_util.dummy_era5_surface_dataset(times=90*24, freq='1H')
+    input_ds = test_util.dummy_era5_surface_dataset(times=90 * 24, freq='1H')
     input_ds.chunk({'time': 31}).to_zarr(input_path)
 
     expected = input_ds.groupby('time.month').apply(

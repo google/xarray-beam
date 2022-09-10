@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,16 +14,24 @@
 # limitations under the License.
 """Rechunking for xarray.Dataset objets."""
 import collections
+import dataclasses
 import itertools
 import logging
 import textwrap
 from typing import (
-    Any, Dict, Iterable, Iterator, List, Optional, Mapping, Sequence, Tuple,
-    Union
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Mapping,
+    Sequence,
+    Tuple,
+    Union,
 )
 
 import apache_beam as beam
-import dataclasses
 import numpy as np
 from rechunker import algorithm
 import xarray
@@ -31,7 +40,7 @@ from xarray_beam._src import core
 
 
 # pylint: disable=logging-not-lazy
-# pylint: disable=logging-format-interpolation
+# pylint: disable=logging-fstring-interpolation
 
 
 def normalize_chunks(
@@ -42,7 +51,8 @@ def normalize_chunks(
   if not chunks.keys() <= dim_sizes.keys():
     raise ValueError(
         'all dimensions used in chunks must also have an indicated size: '
-        f'chunks={chunks} vs dim_sizes={dim_sizes}')
+        f'chunks={chunks} vs dim_sizes={dim_sizes}'
+    )
   result = {}
   for dim, size in dim_sizes.items():
     if dim not in chunks:
@@ -53,7 +63,7 @@ def normalize_chunks(
         raise ValueError(
             f'chunks for dimension {dim} are not constant: {unique_chunks}',
         )
-      result[dim], = unique_chunks
+      (result[dim],) = unique_chunks
     elif chunks[dim] == -1:
       result[dim] = size
     else:
@@ -81,8 +91,8 @@ def rechunking_plan(
 
 def _consolidate_chunks_in_var_group(
     inputs: Sequence[Tuple[core.Key, xarray.Dataset]],
-    combine_kwargs: Optional[Mapping[str, Any]]) -> Tuple[
-        core.Key, xarray.Dataset]:
+    combine_kwargs: Optional[Mapping[str, Any]],
+) -> Tuple[core.Key, xarray.Dataset]:
   """Consolidate chunks across offsets with identical vars."""
   unique_offsets = collections.defaultdict(set)
   unique_var_groups = set()
@@ -92,9 +102,10 @@ def _consolidate_chunks_in_var_group(
     unique_var_groups.add(key.vars)
 
   if len(unique_var_groups) != 1:
-    raise ValueError('expected exactly one unique var group, '
-                     f'got {unique_var_groups}')
-  (cur_vars, ) = unique_var_groups
+    raise ValueError(
+        f'expected exactly one unique var group, got {unique_var_groups}'
+    )
+  (cur_vars,) = unique_var_groups
 
   offsets = {k: sorted(v) for k, v in unique_offsets.items()}
   combined_offsets = {k: v[0] for k, v in offsets.items()}
@@ -115,8 +126,10 @@ def _consolidate_chunks_in_var_group(
   shape = [len(v) for v in offsets.values()]
   nested_array = np.empty(dtype=object, shape=shape)
   if np.prod(shape) != len(inputs):
-    raise ValueError(f'some expected chunks are missing for vars={cur_vars} '
-                     f'shape: {shape} len(inputs): {len(inputs)}')
+    raise ValueError(
+        f'some expected chunks are missing for vars={cur_vars} '
+        f'shape: {shape} len(inputs): {len(inputs)}'
+    )
 
   for key, chunk in inputs:
     nested_key = tuple(offset_index[dim][key.offsets[dim]] for dim in offsets)
@@ -134,9 +147,7 @@ def _consolidate_chunks_in_var_group(
 
   try:
     combined_dataset = xarray.combine_nested(
-        nested_array.tolist(),
-        concat_dim=list(offsets),
-        **kwargs
+        nested_array.tolist(), concat_dim=list(offsets), **kwargs
     )
     return combined_key, combined_dataset
   except (ValueError, xarray.MergeError) as original_error:
@@ -154,7 +165,8 @@ def _consolidate_chunks_in_var_group(
     summaries_str = '\n'.join(summaries)
     raise ValueError(
         f'combining nested dataset chunks for vars={cur_vars} with '
-        f'offsets={offsets} failed.\n' + summaries_str
+        f'offsets={offsets} failed.\n'
+        + summaries_str
     ) from original_error
 
 
@@ -182,12 +194,12 @@ def consolidate_chunks(
   # dimensions.
   for (cur_vars, dim), offsets in combined_offsets_by_vars.items():
     if offsets != combined_offsets_by_dim[dim]:
-      raise ValueError('some expected chunks are missing for '
-                       f'vars={cur_vars}')
+      raise ValueError(f'some expected chunks are missing for vars={cur_vars}')
 
   for cur_vars, cur_inputs in inputs_by_vars.items():
     combined_key, combined_dataset = _consolidate_chunks_in_var_group(
-        cur_inputs, combine_kwargs)
+        cur_inputs, combine_kwargs
+    )
     yield combined_key, combined_dataset
 
 
@@ -248,9 +260,11 @@ def consolidate_fully(
     # check it here again in case consolidate_chunks changes.
     for dim, offset in key.offsets.items():
       if dim in combined_offsets and combined_offsets[dim] != offset:
-        raise ValueError('consolidating chunks fully failed because '
-                         f'chunk\n{chunk}\n has offsets {key.offsets} '
-                         f'that differ from {combined_offsets}')
+        raise ValueError(
+            'consolidating chunks fully failed because '
+            f'chunk\n{chunk}\n has offsets {key.offsets} '
+            f'that differ from {combined_offsets}'
+        )
       combined_offsets[dim] = offset
     concatenated_chunks.append(chunk)
     combined_vars.update(chunk.keys())
@@ -310,6 +324,7 @@ def _round_chunk_key(
 @dataclasses.dataclass
 class ConsolidateChunks(beam.PTransform):
   """Consolidate existing chunks across offsets into bigger chunks."""
+
   target_chunks: Mapping[str, int]
 
   def _prepend_chunk_key(self, key, chunk):
@@ -317,7 +332,7 @@ class ConsolidateChunks(beam.PTransform):
     return rounded_key, (key, chunk)
 
   def _consolidate(self, key, inputs):
-    (consolidated_key, dataset), = consolidate_chunks(inputs)
+    ((consolidated_key, dataset),) = consolidate_chunks(inputs)
     assert key == consolidated_key, (key, consolidated_key)
     return consolidated_key, dataset
 
@@ -332,6 +347,7 @@ class ConsolidateChunks(beam.PTransform):
 
 class ConsolidateVariables(beam.PTransform):
   """Consolidate existing chunks across variables into bigger chunks."""
+
   # TODO(shoyer): add support for partial consolidation into explicit sets
   # of variables.
 
@@ -339,7 +355,7 @@ class ConsolidateVariables(beam.PTransform):
     return key.replace(vars=None), (key, chunk)
 
   def _consolidate(self, key, inputs):
-    (consolidated_key, dataset), = consolidate_variables(inputs)
+    ((consolidated_key, dataset),) = consolidate_variables(inputs)
     assert key.offsets == consolidated_key.offsets, (key, consolidated_key)
     assert key.vars is None
     # TODO(shoyer): consider carefully whether it is better to return key or
@@ -359,7 +375,9 @@ class ConsolidateVariables(beam.PTransform):
 
 
 def _split_chunk_bounds(
-    start: int, stop: int, multiple: int,
+    start: int,
+    stop: int,
+    multiple: int,
 ) -> List[Tuple[int, int]]:
   # pylint: disable=g-doc-args
   # pylint: disable=g-doc-return-or-yield
@@ -416,6 +434,7 @@ def split_chunks(
 @dataclasses.dataclass
 class SplitChunks(beam.PTransform):
   """Split existing chunks into smaller chunks."""
+
   target_chunks: Mapping[str, int]
 
   def _split_chunks(self, key, dataset):
@@ -457,6 +476,7 @@ def in_memory_rechunk(
 @dataclasses.dataclass
 class RechunkStage(beam.PTransform):
   """A single stage of a rechunking pipeline."""
+
   source_chunks: Mapping[str, int]
   target_chunks: Mapping[str, int]
 
@@ -506,7 +526,7 @@ class Rechunk(beam.PTransform):
     """
     if source_chunks.keys() != target_chunks.keys():
       raise ValueError(
-          f'source_chunks and target_chunks have different keys: '
+          'source_chunks and target_chunks have different keys: '
           f'{source_chunks} vs {target_chunks}'
       )
     self.dim_sizes = dim_sizes
@@ -526,8 +546,10 @@ class Rechunk(beam.PTransform):
     self.stage_in = [self.source_chunks, self.read_chunks, self.write_chunks]
     self.stage_out = [self.read_chunks, self.write_chunks, self.target_chunks]
     logging.info(
-        'Rechunking plan:\n' +
-        '\n'.join(f'{s} -> {t}' for s, t in zip(self.stage_in, self.stage_out))
+        'Rechunking plan:\n'
+        + '\n'.join(
+            f'{s} -> {t}' for s, t in zip(self.stage_in, self.stage_out)
+        )
     )
     min_size = itemsize * np.prod(list(self.intermediate_chunks.values()))
     logging.info(f'Smallest intermediates have size {min_size:1.3e}')

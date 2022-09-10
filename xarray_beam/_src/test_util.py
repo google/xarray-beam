@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,7 +73,7 @@ def dummy_era5_surface_dataset(
     variables=2,
     latitudes=73,
     longitudes=144,
-    times=365*4,
+    times=365 * 4,
     freq='6H',
 ):
   """A mock version of the Pangeo ERA5 surface reanalysis dataset."""

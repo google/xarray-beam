@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,8 +16,6 @@
 
 from absl.testing import absltest
 from absl.testing import flagsaver
-import numpy as np
-import pandas as pd
 import xarray
 
 from . import era5_rechunk

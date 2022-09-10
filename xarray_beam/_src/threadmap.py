@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -74,7 +75,8 @@ class _ThreadMap(beam.PTransform):
   def expand(self, pcoll):
     return (
         pcoll
-        | 'BatchElements' >> beam.BatchElements(
+        | 'BatchElements'
+        >> beam.BatchElements(
             min_batch_size=self.num_threads,
             max_batch_size=self.num_threads,
         )
@@ -112,6 +114,7 @@ def _maybe_threaded(beam_transform, thread_transform):
       return beam_transform(func, *args, **kwargs)
     else:
       return thread_transform(func, *args, num_threads=num_threads, **kwargs)
+
   return create
 
 

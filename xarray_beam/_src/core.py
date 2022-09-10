@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,7 +17,6 @@ import itertools
 import math
 from typing import (
     AbstractSet,
-    Container,
     Dict,
     List,
     Iterator,
@@ -179,8 +179,10 @@ def offsets_to_slices(
   slices = {}
   missing_chunk_sizes = [k for k in offsets.keys() if k not in sizes]
   if missing_chunk_sizes:
-    raise ValueError("The following dimensions have offsets specified but we"
-                     f" don't have chunk sizes for them: {missing_chunk_sizes}")
+    raise ValueError(
+        'The following dimensions have offsets specified but we'
+        f" don't have chunk sizes for them: {missing_chunk_sizes}"
+    )
   for k, size in sizes.items():
     offset = offsets.get(k, 0) - base.get(k, 0)
     slices[k] = slice(offset, offset + size, 1)
@@ -248,8 +250,8 @@ def normalize_expanded_chunks(
       result[dim] = chunks[dim]
     else:
       multiple, remainder = divmod(dim_size, chunks[dim])
-      result[dim] = (
-          multiple * (chunks[dim],) + ((remainder,) if remainder else ())
+      result[dim] = multiple * (chunks[dim],) + (
+          (remainder,) if remainder else ()
       )
   return result
 
@@ -346,9 +348,7 @@ class DatasetToChunks(beam.PTransform):
     if var_name is None:
       offsets = self.offsets
     else:
-      offsets = {
-          dim: self.offsets[dim] for dim in self.dataset[var_name].dims
-      }
+      offsets = {dim: self.offsets[dim] for dim in self.dataset[var_name].dims}
 
     if shard_id is None:
       assert self.split_vars
@@ -403,11 +403,8 @@ class DatasetToChunks(beam.PTransform):
           | beam.Reshuffle()
       )
 
-    return (
-        key_pcoll
-        | threadmap.FlatThreadMap(
-            self._key_to_chunks, num_threads=self.num_threads
-        )
+    return key_pcoll | threadmap.FlatThreadMap(
+        self._key_to_chunks, num_threads=self.num_threads
     )
 
 
@@ -416,8 +413,8 @@ def validate_chunk(key: Key, dataset: xarray.Dataset) -> None:
   missing_keys = [repr(k) for k in key.offsets.keys() if k not in dataset.dims]
   if missing_keys:
     raise ValueError(
-        f"Key offset(s) {', '.join(missing_keys)} in {key} not found in Dataset "
-        f"dimensions: {dataset!r}"
+        f"Key offset(s) {', '.join(missing_keys)} in {key} not found in Dataset"
+        f' dimensions: {dataset!r}'
     )
 
   if key.vars is None:
@@ -425,8 +422,8 @@ def validate_chunk(key: Key, dataset: xarray.Dataset) -> None:
   missing_vars = [repr(v) for v in key.vars if v not in dataset.data_vars]
   if missing_vars:
     raise ValueError(
-        f"Key var(s) {', '.join(missing_vars)} in {key} not found in Dataset data "
-        f"variables: {dataset!r}"
+        f"Key var(s) {', '.join(missing_vars)} in {key} not found in Dataset"
+        f' data variables: {dataset!r}'
     )
 
 

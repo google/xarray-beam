@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,18 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """IO with Zarr via Xarray."""
+import dataclasses
 import logging
 from typing import List, Optional, Mapping, Union, MutableMapping
 
 import apache_beam as beam
-import dataclasses
 import xarray
 
 from xarray_beam._src import core
 from xarray_beam._src import rechunk
 from xarray_beam._src import threadmap
 
-# pylint: disable=logging-format-interpolation
+# pylint: disable=logging-fstring-interpolation
 
 
 class _DiscoverTemplate(beam.PTransform):
@@ -44,7 +45,7 @@ class _DiscoverTemplate(beam.PTransform):
     # here anyways
     kwargs = {'compat': 'override'}
     _, template = rechunk.consolidate_fully(
-        inputs, combine_kwargs=kwargs, merge_kwargs=kwargs,
+        inputs, combine_kwargs=kwargs, merge_kwargs=kwargs
     )
     return template
 
@@ -99,9 +100,7 @@ def _setup_zarr(template, store, zarr_chunks):
     if 'chunks' in var.encoding:
       del var.encoding['chunks']
   logging.info(f'writing Zarr metadata for template:\n{template}')
-  template2.to_zarr(
-      store, compute=False, consolidated=True, mode='w',
-  )
+  template2.to_zarr(store, compute=False, consolidated=True, mode='w')
 
 
 def _validate_zarr_chunk(key, chunk, template):
@@ -139,8 +138,9 @@ def _write_chunk_to_zarr(key, chunk, store, template):
   ]
   writable_chunk = chunk.drop_vars(already_written)
   try:
-    future = writable_chunk.chunk().to_zarr(store, region=region, compute=False,
-                                            consolidated=True)
+    future = writable_chunk.chunk().to_zarr(
+        store, region=region, compute=False, consolidated=True
+    )
     future.compute(num_workers=len(writable_chunk))
   except Exception as e:
     raise RuntimeError(
@@ -224,8 +224,7 @@ class ChunksToZarr(beam.PTransform):
       else:
         assert self.template is None
         template = beam.pvalue.AsSingleton(
-            pcoll
-            | 'DiscoverTemplate' >> _DiscoverTemplate()
+            pcoll | 'DiscoverTemplate' >> _DiscoverTemplate()
         )
       setup_result = beam.pvalue.AsSingleton(
           template.pvalue
@@ -234,10 +233,13 @@ class ChunksToZarr(beam.PTransform):
     return (
         pcoll
         | 'WaitForSetup' >> beam.Map(lambda x, _: x, setup_result)
-        | 'ValidateChunks' >> beam.MapTuple(
-            self._validate_zarr_chunk, template=template,
+        | 'ValidateChunks'
+        >> beam.MapTuple(
+            self._validate_zarr_chunk,
+            template=template,
         )
-        | 'WriteChunks' >> threadmap.ThreadMapTuple(
+        | 'WriteChunks'
+        >> threadmap.ThreadMapTuple(
             self._write_chunk_to_zarr,
             template=template,
             num_threads=self.num_threads,
@@ -248,6 +250,7 @@ class ChunksToZarr(beam.PTransform):
 @dataclasses.dataclass
 class DatasetToZarr(beam.PTransform):
   """Write an entire xarray.Dataset to a Zarr store."""
+
   dataset: xarray.Dataset
   store: Union[str, MutableMapping[str, bytes]]
   zarr_chunks: Optional[Mapping[str, int]] = None
@@ -260,6 +263,6 @@ class DatasetToZarr(beam.PTransform):
         pcoll
         | core.DatasetToChunks(source_dataset)
         | ChunksToZarr(
-            self.store, template=self.dataset, zarr_chunks=self.zarr_chunks,
+            self.store, template=self.dataset, zarr_chunks=self.zarr_chunks
         )
     )

@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,7 +24,6 @@ INPUT_PATH = flags.DEFINE_string('input_path', None, help='Input Zarr path')
 OUTPUT_PATH = flags.DEFINE_string('output_path', None, help='Output Zarr path')
 RUNNER = flags.DEFINE_string('runner', None, 'beam.runners.Runner')
 
-FLAGS = flags.FLAGS
 
 # pylint: disable=expression-not-assigned
 

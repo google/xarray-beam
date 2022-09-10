@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -76,8 +77,7 @@ class DatasetToZarrTest(test_util.TestCase):
       inputs | xbeam.ChunksToZarr(temp_dir, template)
 
     inputs2 = [
-        (xbeam.Key({'x': 0}),
-         dataset.expand_dims(z=[1, 2])),
+        (xbeam.Key({'x': 0}), dataset.expand_dims(z=[1, 2])),
     ]
     temp_dir = self.create_tempdir().full_path
     with self.assertRaisesRegex(
@@ -111,10 +111,14 @@ class DatasetToZarrTest(test_util.TestCase):
       xarray.testing.assert_identical(dataset, result)
 
   @parameterized.named_parameters(
-      {'testcase_name': 'combined_coords',
-       'coords': {'bar': (('x', 'y'), -np.arange(6).reshape(3, 2))}},
-      {'testcase_name': 'separate_coords',
-       'coords': {'x': np.arange(3), 'y': np.arange(2)}},
+      {
+          'testcase_name': 'combined_coords',
+          'coords': {'bar': (('x', 'y'), -np.arange(6).reshape(3, 2))},
+      },
+      {
+          'testcase_name': 'separate_coords',
+          'coords': {'x': np.arange(3), 'y': np.arange(2)},
+      },
   )
   def test_2d_chunks_to_zarr(self, coords):
     dataset = xarray.Dataset(
@@ -148,10 +152,7 @@ class DatasetToZarrTest(test_util.TestCase):
     )
     chunked = dataset.chunk({'x': 3})
     temp_dir = self.create_tempdir().full_path
-    (
-        test_util.EagerPipeline()
-        | xbeam.DatasetToZarr(chunked, temp_dir)
-    )
+    test_util.EagerPipeline() | xbeam.DatasetToZarr(chunked, temp_dir)
     actual = xarray.open_zarr(temp_dir, consolidated=True)
     xarray.testing.assert_identical(actual, dataset)
 
@@ -164,10 +165,7 @@ class DatasetToZarrTest(test_util.TestCase):
         ValueError,
         'template does not have any variables chunked with Dask',
     ):
-      (
-          test_util.EagerPipeline()
-          | xbeam.DatasetToZarr(dataset, temp_dir)
-      )
+      test_util.EagerPipeline() | xbeam.DatasetToZarr(dataset, temp_dir)
 
   def test_validate_zarr_chunk_accepts_partial_key(self):
     dataset = xarray.Dataset(
@@ -176,9 +174,8 @@ class DatasetToZarrTest(test_util.TestCase):
     )
     # Should not raise an exception:
     xbeam._src.zarr._validate_zarr_chunk(
-        key=xbeam.Key({'x': 0}),
-        chunk=dataset,
-        template=dataset.chunk())
+        key=xbeam.Key({'x': 0}), chunk=dataset, template=dataset.chunk()
+    )
 
 
 if __name__ == '__main__':

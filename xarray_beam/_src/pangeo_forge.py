@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,11 +16,11 @@
 import contextlib
 import tempfile
 from typing import (
-  Dict,
-  Iterator,
-  Optional,
-  Mapping,
-  Tuple,
+    Dict,
+    Iterator,
+    Optional,
+    Mapping,
+    Tuple,
 )
 
 import apache_beam as beam
@@ -35,17 +36,13 @@ def _zero_dimensions(dataset: xarray.Dataset) -> Mapping[str, int]:
 
 
 def _expand_dimensions_by_key(
-    dataset: xarray.Dataset,
-    index: 'FilePatternIndex',
-    pattern: 'FilePattern'
+    dataset: xarray.Dataset, index: 'FilePatternIndex', pattern: 'FilePattern'
 ) -> xarray.Dataset:
   """Expand the dimensions of the `Dataset` by offsets found in the `Key`."""
   combine_dims_by_name = {
-    combine_dim.name: combine_dim for combine_dim in pattern.combine_dims
+      combine_dim.name: combine_dim for combine_dim in pattern.combine_dims
   }
-  index_by_name = {
-    idx.name: idx for idx in index
-  }
+  index_by_name = {idx.name: idx for idx in index}
 
   if not combine_dims_by_name:
     return dataset
@@ -59,7 +56,7 @@ def _expand_dimensions_by_key(
       combine_dim = combine_dims_by_name[dim_key]
     except KeyError:
       raise ValueError(
-        f"could not find CombineDim named {dim_key!r} in pattern {pattern!r}."
+          f'could not find CombineDim named {dim_key!r} in pattern {pattern!r}.'
       )
 
     dim_val = combine_dim.keys[index_by_name[dim_key].index]
@@ -78,7 +75,7 @@ class FilePatternToChunks(beam.PTransform):
       pattern: 'FilePattern',
       chunks: Optional[Mapping[str, int]] = None,
       local_copy: bool = False,
-      xarray_open_kwargs: Optional[Dict] = None
+      xarray_open_kwargs: Optional[Dict] = None,
   ):
     """Initialize FilePatternToChunks.
 
@@ -99,7 +96,7 @@ class FilePatternToChunks(beam.PTransform):
     self._max_size_idx = {}
 
     if pattern.merge_dims:
-      raise ValueError("patterns with `MergeDim`s are not supported.")
+      raise ValueError('patterns with `MergeDim`s are not supported.')
 
   @contextlib.contextmanager
   def _open_dataset(self, path: str) -> xarray.Dataset:
@@ -107,29 +104,28 @@ class FilePatternToChunks(beam.PTransform):
     if self.local_copy:
       with tempfile.TemporaryDirectory() as tmpdir:
         local_file = fsspec.open_local(
-          f"simplecache::{path}",
-          simplecache={'cache_storage': tmpdir}
+            f'simplecache::{path}', simplecache={'cache_storage': tmpdir}
         )
         yield xarray.open_dataset(local_file, **self.xarray_open_kwargs)
     else:
       with FileSystems().open(path) as file:
-          yield xarray.open_dataset(file, **self.xarray_open_kwargs)
+        yield xarray.open_dataset(file, **self.xarray_open_kwargs)
 
   def _open_chunks(
-      self,
-      index: 'FilePatternIndex',
-      path: str
+      self, index: 'FilePatternIndex', path: str
   ) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
     """Open datasets into chunks with XArray."""
     with self._open_dataset(path) as dataset:
-
       dataset = _expand_dimensions_by_key(dataset, index, self.pattern)
 
       if not self._max_size_idx:
         self._max_size_idx = dataset.sizes
 
       base_key = core.Key(_zero_dimensions(dataset)).with_offsets(
-        **{dim.name: self._max_size_idx[dim.name] * dim.index for dim in index}
+          **{
+              dim.name: self._max_size_idx[dim.name] * dim.index
+              for dim in index
+          }
       )
 
       num_threads = len(dataset.data_vars)
@@ -139,8 +135,9 @@ class FilePatternToChunks(beam.PTransform):
         yield base_key, dataset.compute(num_workers=num_threads)
         return
 
-      for new_key, chunk in rechunk.split_chunks(base_key, dataset,
-                                                 self.chunks):
+      for new_key, chunk in rechunk.split_chunks(
+          base_key, dataset, self.chunks
+      ):
         yield new_key, chunk.compute(num_workers=num_threads)
 
   def expand(self, pcoll):

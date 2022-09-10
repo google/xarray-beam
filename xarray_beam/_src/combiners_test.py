@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,25 +38,25 @@ class MeanTest(test_util.TestCase):
 
     with self.subTest('skipna-default'):
       expected = dataset.mean('y', skipna=True)
-      actual, = inputs_y | xbeam.Mean.Globally()
+      (actual,) = inputs_y | xbeam.Mean.Globally()
       xarray.testing.assert_allclose(expected, actual)
 
     with self.subTest('skipna=True'):
       expected = dataset.mean('y', skipna=True)
-      actual, = inputs_y | xbeam.Mean.Globally(skipna=True)
+      (actual,) = inputs_y | xbeam.Mean.Globally(skipna=True)
       xarray.testing.assert_allclose(expected, actual)
 
       expected = dataset.mean('x', skipna=True)
-      actual, = inputs_x | xbeam.Mean.Globally(skipna=True)
+      (actual,) = inputs_x | xbeam.Mean.Globally(skipna=True)
       xarray.testing.assert_allclose(expected, actual)
 
     with self.subTest('skipna=False', skipna=False):
       expected = dataset.mean('y', skipna=False)
-      actual, = inputs_y | xbeam.Mean.Globally(skipna=False)
+      (actual,) = inputs_y | xbeam.Mean.Globally(skipna=False)
       xarray.testing.assert_allclose(expected, actual)
 
       expected = dataset.mean('x', skipna=False)
-      actual, = inputs_x | xbeam.Mean.Globally(skipna=False)
+      (actual,) = inputs_x | xbeam.Mean.Globally(skipna=False)
       xarray.testing.assert_allclose(expected, actual)
 
   def test_per_key(self):

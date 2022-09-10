@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,22 +27,19 @@ INPUT_PATH = flags.DEFINE_string('input_path', None, help='Input Zarr path')
 OUTPUT_PATH = flags.DEFINE_string('output_path', None, help='Output Zarr path')
 RUNNER = flags.DEFINE_string('runner', None, 'beam.runners.Runner')
 
-FLAGS = flags.FLAGS
 
 # pylint: disable=expression-not-assigned
 
 
 def rekey_chunk_on_month_hour(
-    key: xbeam.Key, dataset: xarray.Dataset,
+    key: xbeam.Key, dataset: xarray.Dataset
 ) -> Tuple[xbeam.Key, xarray.Dataset]:
   """Replace the 'time' dimension with 'month'/'hour'."""
   month = dataset.time.dt.month.item()
   hour = dataset.time.dt.hour.item()
   new_key = key.with_offsets(time=None, month=month - 1, hour=hour)
-  new_dataset = (
-      dataset
-      .squeeze('time', drop=True)
-      .expand_dims(month=[month], hour=[hour])
+  new_dataset = dataset.squeeze('time', drop=True).expand_dims(
+      month=[month], hour=[hour]
   )
   return new_key, new_dataset
 
@@ -50,7 +48,7 @@ def main(argv):
   # By passing chunks=None, we use Xarray's lazy-loading instead of Dask. This
   # result is much less data being passed from the launch script to workers.
   source_dataset = xarray.open_zarr(
-      INPUT_PATH.value, chunks=None, consolidated=True,
+      INPUT_PATH.value, chunks=None, consolidated=True
   )
 
   # This lazy "template" allows us to setup the Zarr outputs before running the
@@ -59,8 +57,7 @@ def main(argv):
   # the pipeline slightly more efficient.
   max_month = source_dataset.time.dt.month.max().item()  # normally 12
   template = (
-      source_dataset
-      .chunk()
+      source_dataset.chunk()
       .pipe(xarray.zeros_like)
       .isel(time=0, drop=True)
       .expand_dims(month=np.arange(1, max_month + 1), hour=np.arange(24))

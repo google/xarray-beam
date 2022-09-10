@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Combiners for xarray-beam."""
-from typing import Any
-import apache_beam as beam
 import dataclasses
+from typing import Any
+
+import apache_beam as beam
 
 
 # TODO(shoyer): add other combiners: sum, std, var, min, max, etc.
@@ -23,6 +25,7 @@ import dataclasses
 @dataclasses.dataclass
 class MeanCombineFn(beam.transforms.CombineFn):
   """CombineFn for computing an arithmetic mean of xarray.Dataset objects."""
+
   skipna: bool = True
   dtype: Any = None
 
@@ -59,6 +62,7 @@ class Mean:
   @dataclasses.dataclass
   class Globally(beam.PTransform):
     """Calculate the global mean over a pcollection."""
+
     skipna: bool = True
     dtype: Any = None
 
@@ -69,6 +73,7 @@ class Mean:
   @dataclasses.dataclass
   class PerKey(beam.PTransform):
     """Calculate the per-key mean over a pcollection."""
+
     skipna: bool = True
     dtype: Any = None
 

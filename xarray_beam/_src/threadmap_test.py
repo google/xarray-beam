@@ -1,3 +1,4 @@
+# pyformat: mode=midnight
 # Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,7 +28,6 @@ from xarray_beam._src import threadmap
 class ThreadMapTest(test_util.TestCase):
 
   def test_map(self):
-
     def f(*args, **kwargs):
       return args, kwargs
 
@@ -39,7 +39,6 @@ class ThreadMapTest(test_util.TestCase):
     self.assertEqual(expected, actual)
 
   def test_flat_map(self):
-
     def f(*args, **kwargs):
       return [(args, kwargs)] * 2
 
@@ -51,7 +50,6 @@ class ThreadMapTest(test_util.TestCase):
     self.assertEqual(expected, actual)
 
   def test_map_tuple(self):
-
     def f(a, b, y=None):
       return a, b, y
 
@@ -65,7 +63,6 @@ class ThreadMapTest(test_util.TestCase):
     self.assertEqual(expected, actual)
 
   def test_flat_map_tuple(self):
-
     def f(a, b, y=None):
       return a, b, y
 
@@ -74,7 +71,7 @@ class ThreadMapTest(test_util.TestCase):
     self.assertEqual(expected, actual)
 
     actual = [(1, 2), (3, 4)] | threadmap.FlatThreadMapTuple(
-        f, y=5, num_threads=None,
+        f, y=5, num_threads=None
     )
     self.assertEqual(expected, actual)
 
