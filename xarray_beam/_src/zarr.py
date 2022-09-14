@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """IO with Zarr via Xarray."""
+import collections
 import dataclasses
 import logging
-from typing import List, Optional, Mapping, Union, MutableMapping
+from typing import Any, List, Optional, Mapping, Tuple, Union, MutableMapping
 
 import apache_beam as beam
 import xarray
@@ -26,19 +27,75 @@ from xarray_beam._src import threadmap
 
 # pylint: disable=logging-fstring-interpolation
 
+ReadableStore = Union[str, Mapping[str, bytes]]
+WritableStore = Union[str, MutableMapping[str, bytes]]
+
+
+def _infer_chunks(dataset: xarray.Dataset) -> Mapping[str, int]:
+  """Infer chunks for an xarray.Dataset loaded from Zarr."""
+  # The original Zarr array chunks (as tuples) are stored in the "encoding"
+  # dictionary on each DataArray object.
+
+  chunks_sets = collections.defaultdict(set)
+  for name, variable in dataset.items():
+    # exclude variables that are indexed, which are loaded into memory already
+    if name not in dataset.indexes:
+      for dim, size in zip(variable.dims, variable.encoding['chunks']):
+        chunks_sets[dim].add(size)
+
+  chunks = {}
+  for dim, sizes in chunks_sets.items():
+    if len(sizes) > 1:
+      raise ValueError(
+          f'inconsistent chunk sizes on Zarr dataset for dimension {dim!r}: '
+          f'{sizes}'
+      )
+    (chunks[dim],) = sizes
+  return chunks
+
+
+def open_zarr(
+    store: ReadableStore, **kwargs: Any
+) -> Tuple[xarray.Dataset, Mapping[str, int]]:
+  """Returns a lazily indexable xarray.Dataset and chunks from a Zarr store.
+
+  Only Zarr stores with the consistent chunking between non-indexed variables
+  (i.e., those for which the ``Dataset.chunks`` property is valid) can be
+  opened.
+
+  Args:
+    store: Xarray compatible Zarr store to open.
+    **kwargs: passed on to xarray.open_zarr. The "chunks" keyword argument is
+      not supported.
+
+  Returns:
+    (dataset, chunks) pair, consisting of a Dataset with the contents of the
+    Zarr store and a mapping from dimensions to integer chunk sizes.
+  """
+  if 'chunks' in kwargs:
+    raise TypeError(
+        'xarray_beam.open_zarr does not support the `chunks` argument'
+    )
+  dataset = xarray.open_zarr(store, **kwargs, chunks=None)
+  chunks = _infer_chunks(dataset)
+  return dataset, chunks
+
+
+def make_template(dataset: xarray.Dataset) -> xarray.Dataset:
+  """Make a lazy Dask xarray.Dataset of all zeros."""
+  return xarray.zeros_like(dataset.chunk(-1))
+
 
 class _DiscoverTemplate(beam.PTransform):
   """Discover the Zarr template from (Key, xarray.Dataset) pairs."""
 
   def _make_template_chunk(self, key, chunk):
-    # Make a lazy Dask xarray.Dataset of all zeros shaped like this chunk.
     # The current rule is that everything that *can* be chunked with Dask
     # *should* be chunked, but conceivably this should be customizable, e.g.,
     # for handling 2D latitude/longitude arrays. It's usually safe to rewrite
     # overlapping arrays multiple times in different chunks (Zarr writes are
     # typically atomic), but this may be wasteful.
-    zeros = xarray.zeros_like(chunk.chunk(-1))
-    return key, zeros
+    return key, make_template(chunk)
 
   def _consolidate(self, inputs):
     # don't bother with compatibility checks; we won't be computing the values
@@ -64,7 +121,9 @@ def _verify_template_is_lazy(template: xarray.Dataset):
     # We require at least one chunked variable with Dask. Otherwise, there would
     # be no data to write as part of the Beam pipeline.
     raise ValueError(
-        f'template does not have any variables chunked with Dask:\n{template}'
+        'template does not have any variables chunked with Dask. Convert any '
+        'variables that will be written in the pipeline into lazy dask arrays, '
+        f'e.g., with xarray_beam.make_template():\n{template}'
     )
 
 
@@ -153,7 +212,7 @@ class ChunksToZarr(beam.PTransform):
 
   def __init__(
       self,
-      store: Union[str, MutableMapping[str, bytes]],
+      store: WritableStore,
       template: Union[xarray.Dataset, beam.pvalue.AsSingleton, None] = None,
       zarr_chunks: Optional[Mapping[str, int]] = None,
       num_threads: Optional[int] = None,
@@ -162,11 +221,12 @@ class ChunksToZarr(beam.PTransform):
 
     Args:
       store: a string corresponding to a Zarr path or an existing Zarr store.
-      template: an argument providing an xarray.Dataset already chunked using
-        Dask that matches the structure of xarray.Dataset "chunks" that will be
-        fed into this PTransform. One or more variables are expected to be
-        "chunked" with Dask, and will only have their metadata written to Zarr
-        without array values. Three types of inputs are supported:
+      template: an argument providing a lazy xarray.Dataset already chunked
+        using Dask (e.g., as created by `xarray_beam.make_template`) that
+        matches the structure of the virtual combined dataset corresponding to
+        the chunks fed into this PTransform. One or more variables are expected
+        to be "chunked" with Dask, and will only have their metadata written to
+        Zarr without array values. Three types of inputs are supported:
 
         1. If `template` is an xarray.Dataset, the Zarr store is setup eagerly.
         2. If `template` is a beam.pvalue.AsSingleton object representing the
@@ -252,7 +312,7 @@ class DatasetToZarr(beam.PTransform):
   """Write an entire xarray.Dataset to a Zarr store."""
 
   dataset: xarray.Dataset
-  store: Union[str, MutableMapping[str, bytes]]
+  store: WritableStore
   zarr_chunks: Optional[Mapping[str, int]] = None
 
   def expand(self, pcoll):

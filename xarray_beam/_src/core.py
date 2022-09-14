@@ -275,12 +275,15 @@ class DatasetToChunks(beam.PTransform):
         chunked. If the dataset *is* already chunked with Dask, `chunks` takes
         precedence over the existing chunks.
       split_vars: whether to split the dataset into separate records for each
-        data variable or to keep all data variables together.
+        data variable or to keep all data variables together. This is
+        recommended if you don't need perform joint operations on different
+        dataset variables and individual variable chunks are sufficiently large.
       num_threads: optional number of Dataset chunks to load in parallel per
         worker. More threads can increase throughput, but also increases memory
         usage and makes it harder for Beam runners to shard work. Note that each
         variable in a Dataset is already loaded in parallel, so this is most
-        useful for Datasets with a small number of variables.
+        useful for Datasets with a small number of variables or when using
+        split_vars=True.
       shard_keys_threshold: threshold at which to compute keys on Beam workers,
         rather than only on the host process. This is important for scaling
         pipelines to millions of tasks.

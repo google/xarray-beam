@@ -19,9 +19,11 @@
 .. autosummary::
     :toctree: _autosummary
 
+    open_zarr
     DatasetToChunks
     ChunksToZarr
     DatasetToZarr
+    make_template
 ```
 
 ## Aggregation
@@ -53,7 +55,7 @@
 ```{eval-rst}
 .. autosummary::
     :toctree: _autosummary
-    
+
     ValidateEachChunk
 ```
 
@@ -62,7 +64,7 @@
 ```{eval-rst}
 .. autosummary::
     :toctree: _autosummary
-    
+
     offsets_to_slices
     validate_chunk
     consolidate_chunks

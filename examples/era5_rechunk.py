@@ -16,7 +16,6 @@
 from absl import app
 from absl import flags
 import apache_beam as beam
-import xarray
 import xarray_beam as xbeam
 
 
@@ -29,11 +28,8 @@ RUNNER = flags.DEFINE_string('runner', None, 'beam.runners.Runner')
 
 
 def main(argv):
-  source_dataset = xarray.open_zarr(
-      INPUT_PATH.value, chunks=None, consolidated=True
-  )
-  template = xarray.zeros_like(source_dataset.chunk())
-  source_chunks = {'latitude': -1, 'longitude': -1, 'time': 31}
+  source_dataset, source_chunks = xbeam.open_zarr(INPUT_PATH.value)
+  template = xbeam.make_template(source_dataset)
   target_chunks = {'latitude': 5, 'longitude': 5, 'time': -1}
 
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
