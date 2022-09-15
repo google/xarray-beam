@@ -294,10 +294,7 @@ class ChunksToZarr(beam.PTransform):
         pcoll
         | 'WaitForSetup' >> beam.Map(lambda x, _: x, setup_result)
         | 'ValidateChunks'
-        >> beam.MapTuple(
-            self._validate_zarr_chunk,
-            template=template,
-        )
+        >> beam.MapTuple(self._validate_zarr_chunk, template=template)
         | 'WriteChunks'
         >> threadmap.ThreadMapTuple(
             self._write_chunk_to_zarr,

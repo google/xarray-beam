@@ -180,8 +180,8 @@ def offsets_to_slices(
   missing_chunk_sizes = [k for k in offsets.keys() if k not in sizes]
   if missing_chunk_sizes:
     raise ValueError(
-        'The following dimensions have offsets specified but we'
-        f" don't have chunk sizes for them: {missing_chunk_sizes}"
+        'some dimensions have offsets specified but no dimension sizes: '
+        f'offsets={offsets} and sizes={sizes}'
     )
   for k, size in sizes.items():
     offset = offsets.get(k, 0) - base.get(k, 0)
@@ -402,11 +402,11 @@ class DatasetToChunks(beam.PTransform):
       key_pcoll = (
           pcoll
           | beam.Create(self._shard_inputs())
-          | beam.FlatMapTuple(self._iter_shard_keys)
+          | 'GenerateKeys' >> beam.FlatMapTuple(self._iter_shard_keys)
           | beam.Reshuffle()
       )
 
-    return key_pcoll | threadmap.FlatThreadMap(
+    return key_pcoll | 'KeyToChunks' >> threadmap.FlatThreadMap(
         self._key_to_chunks, num_threads=self.num_threads
     )
 
