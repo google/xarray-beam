@@ -162,7 +162,7 @@ def _setup_zarr(template, store, zarr_chunks):
   template2.to_zarr(store, compute=False, consolidated=True, mode='w')
 
 
-def _validate_zarr_chunk(key, chunk, template):
+def _validate_zarr_chunk(key, chunk, template, zarr_chunks):
   """Check a chunk for consistency against the given template."""
   unexpected_indexes = [k for k in chunk.indexes if k not in template.indexes]
   if unexpected_indexes:
@@ -170,6 +170,7 @@ def _validate_zarr_chunk(key, chunk, template):
         'unexpected new indexes found in chunk but not template: '
         f'{unexpected_indexes}'
     )
+
   region = core.offsets_to_slices(key.offsets, chunk.sizes)
   for dim, full_index in template.indexes.items():
     if dim in chunk.indexes:
@@ -177,9 +178,32 @@ def _validate_zarr_chunk(key, chunk, template):
       actual_index = chunk.indexes[dim]
       if not expected_index.equals(actual_index):
         raise ValueError(
-            f'template and chunk indexes do not match for dim {dim}:\n'
+            f'template and chunk indexes do not match for dim {dim!r}:\n'
             f'{expected_index}\nvs.\n{actual_index}'
         )
+
+  if zarr_chunks is None:
+    zarr_chunks = {k: v[0] for k, v in template.chunks.items()}
+  for dim, offset in key.offsets.items():
+    if dim not in zarr_chunks:
+      continue
+    if offset % zarr_chunks[dim]:
+      raise ValueError(
+          f'chunk offset {offset} along dimension {dim!r} is not a multiple of '
+          f'zarr chunks {zarr_chunks}'
+      )
+    if (
+        chunk.sizes[dim] % zarr_chunks[dim]
+        and offset + chunk.sizes[dim] != template.sizes[dim]
+    ):
+      raise ValueError(
+          f'chunk is smaller than zarr chunks {zarr_chunks} along at least one '
+          'dimension, which can lead to a race condition that results in '
+          'incomplete writes. Use ConsolidateChunks() or Rechunk() to ensure '
+          'appropriate chunk sizes before feeding data into ChunksToZarr(). '
+          f'\nkey={key}\nchunk={chunk}'
+      )
+
   # TODO(shoyer): consider verifying "already_written" variables for
   # consistency, maybe with an opt-in flag?
   # Note that variable names, shapes & dtypes are verified in xarray's to_zarr()
@@ -267,7 +291,7 @@ class ChunksToZarr(beam.PTransform):
     # must have defaults for MapTuple". Beam should probably be happy with a
     # keyword-only argument, too, but it doesn't like that yet.
     assert template is not None
-    _validate_zarr_chunk(key, chunk, template)
+    _validate_zarr_chunk(key, chunk, template, self.zarr_chunks)
     return key, chunk
 
   def _write_chunk_to_zarr(self, key, chunk, template=None):
@@ -277,7 +301,7 @@ class ChunksToZarr(beam.PTransform):
   def expand(self, pcoll):
     if isinstance(self.template, xarray.Dataset):
       template = self.template
-      setup_result = None
+      setup_result = None  # already setup in __init__
     else:
       if isinstance(self.template, beam.pvalue.AsSingleton):
         template = self.template

@@ -201,8 +201,7 @@ class DatasetToZarrTest(test_util.TestCase):
     )
     temp_dir = self.create_tempdir().full_path
     with self.assertRaisesRegex(
-        ValueError,
-        'template does not have any variables chunked with Dask',
+        ValueError, 'template does not have any variables chunked with Dask'
     ):
       test_util.EagerPipeline() | xbeam.DatasetToZarr(dataset, temp_dir)
 
@@ -213,8 +212,39 @@ class DatasetToZarrTest(test_util.TestCase):
     )
     # Should not raise an exception:
     xbeam._src.zarr._validate_zarr_chunk(
-        key=xbeam.Key({'x': 0}), chunk=dataset, template=dataset.chunk()
+        key=xbeam.Key({'x': 0}),
+        chunk=dataset,
+        template=dataset.chunk(),
+        zarr_chunks=None,
     )
+
+  def test_to_zarr_wrong_multiple_error(self):
+    inputs = [
+        (xbeam.Key({'x': 3}), xarray.Dataset({'foo': ('x', np.arange(3, 6))})),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    with self.assertRaisesRegex(
+        ValueError,
+        "chunk offset 3 along dimension 'x' is not a multiple of zarr chunks "
+        "{'x': 4}",
+    ):
+      inputs | xbeam.ChunksToZarr(temp_dir, zarr_chunks={'x': 4})
+
+  def test_to_zarr_needs_consolidation_error(self):
+    ds = xarray.Dataset({'foo': ('x', np.arange(6))})
+    inputs = [
+        (xbeam.Key({'x': 0}), ds.head(3)),
+        (xbeam.Key({'x': 3}), ds.tail(3)),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    with self.assertRaisesRegex(
+        ValueError, 'chunk is smaller than zarr chunks'
+    ):
+      inputs | xbeam.ChunksToZarr(temp_dir, zarr_chunks={'x': 6})
+    with self.assertRaisesRegex(
+        ValueError, 'chunk is smaller than zarr chunks'
+    ):
+      inputs | xbeam.ChunksToZarr(temp_dir, template=ds.chunk())
 
 
 if __name__ == '__main__':
