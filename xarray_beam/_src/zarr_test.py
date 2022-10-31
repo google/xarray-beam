@@ -60,10 +60,14 @@ class DatasetToZarrTest(test_util.TestCase):
             'bar': ('x', np.ones(3)),
         },
     )
-    actual = xbeam.make_template(source)
-    expected = source * 0
-    xarray.testing.assert_identical(actual, expected)
-    self.assertEqual(actual.chunks, {'x': (3,)})
+    template = xbeam.make_template(source)
+    self.assertEqual(list(template.data_vars), ['foo', 'bar'])
+    self.assertEqual(template.chunks, {'x': (3,)})
+    self.assertEqual(template.sizes, {'x': 3})
+    with self.assertRaisesRegex(
+        ValueError, 'cannot compute array values of xarray.Dataset objects'
+    ):
+      template.compute()
 
   def test_chunks_to_zarr(self):
     dataset = xarray.Dataset(

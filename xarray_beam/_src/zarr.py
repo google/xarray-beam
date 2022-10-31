@@ -18,6 +18,8 @@ import logging
 from typing import Any, List, Optional, Mapping, Tuple, Union, MutableMapping
 
 import apache_beam as beam
+import dask
+import dask.array
 import xarray
 
 from xarray_beam._src import core
@@ -80,9 +82,39 @@ def open_zarr(
   return dataset, chunks
 
 
+def _raise_template_error():
+  raise ValueError(
+      'cannot compute array values of xarray.Dataset objects created directly '
+      'or indirectly from xarray_beam.make_template()'
+  )
+
+
 def make_template(dataset: xarray.Dataset) -> xarray.Dataset:
-  """Make a lazy Dask xarray.Dataset of all zeros."""
-  return xarray.zeros_like(dataset.chunk(-1))
+  """Make a lazy Dask xarray.Dataset for use only as a template."""
+  # TODO(shoyer): add options for customizing what becomes lazy, or consider
+  # chunking all data_vars instead of using dimensionality. This version matches
+  # xarray.Dataset.chunk(-1) in making every variable that is not indexed lazy.
+
+  delayed = dask.delayed(_raise_template_error)()
+  name = 'make_template'
+
+  data_vars = {}
+  for k, v in dataset.items():
+    data = dask.array.from_delayed(delayed, v.shape, v.dtype, name=name)
+    data_vars[k] = (v.dims, data, v.attrs)
+
+  coords = {}
+  for k, v in dataset.coords.items():
+    data = (
+        dask.array.from_delayed(delayed, v.shape, v.dtype, name=name)
+        if k not in dataset.indexes
+        else v.data
+    )
+    coords[k] = (v.dims, data, v.attrs)
+
+  attrs = dataset.attrs
+
+  return xarray.Dataset(data_vars, coords, attrs)
 
 
 class _DiscoverTemplate(beam.PTransform):
