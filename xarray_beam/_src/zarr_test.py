@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tests for xarray_beam._src.core."""
+import re
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import dask.array as da
@@ -68,6 +70,39 @@ class DatasetToZarrTest(test_util.TestCase):
         ValueError, 'cannot compute array values of xarray.Dataset objects'
     ):
       template.compute()
+
+  def test_make_template_lazy_vars_on_numpy(self):
+    source = xarray.Dataset(
+        {
+            'foo': ('x', np.ones(3)),
+            'bar': ('x', np.ones(3)),
+        },
+    )
+    template = xbeam.make_template(source, lazy_vars={'foo'})
+    self.assertEqual(template.foo.chunks, ((3,),))
+    self.assertIsNone(template.bar.chunks)
+
+  def test_make_template_lazy_vars_on_dask(self):
+    source = xarray.Dataset(
+        {
+            'foo': ('x', np.ones(3)),
+            'bar': ('x', np.ones(3)),
+        },
+    ).chunk({'x': 2})
+    template = xbeam.make_template(source, lazy_vars={'foo'})
+    self.assertEqual(template.foo.chunks, ((3,),))  # one chunk
+    self.assertIsInstance(template.bar.data, np.ndarray)  # computed
+
+  def test_make_template_from_chunked(self):
+    source = xarray.Dataset(
+        {
+            'foo': ('x', da.ones(3)),
+            'bar': ('x', np.ones(3)),
+        },
+    )
+    template = xbeam._src.zarr._make_template_from_chunked(source)
+    self.assertEqual(template.foo.chunks, ((3,),))
+    self.assertIsNone(template.bar.chunks)
 
   def test_chunks_to_zarr(self):
     dataset = xarray.Dataset(
@@ -228,8 +263,10 @@ class DatasetToZarrTest(test_util.TestCase):
     temp_dir = self.create_tempdir().full_path
     with self.assertRaisesRegex(
         ValueError,
-        "chunk offset 3 along dimension 'x' is not a multiple of zarr chunks "
-        "{'x': 4}",
+        (
+            "chunk offset 3 along dimension 'x' is not a multiple of zarr "
+            "chunks {'x': 4}"
+        ),
     ):
       inputs | xbeam.ChunksToZarr(temp_dir, zarr_chunks={'x': 4})
 
@@ -248,6 +285,57 @@ class DatasetToZarrTest(test_util.TestCase):
         ValueError, 'chunk is smaller than zarr chunks'
     ):
       inputs | xbeam.ChunksToZarr(temp_dir, template=ds.chunk())
+
+  def test_to_zarr_fixed_template(self):
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
+    template = dataset.chunk({'x': 3})
+    inputs = [
+        (xbeam.Key({'x': 0}), dataset.head(3)),
+        (xbeam.Key({'x': 3}), dataset.tail(3)),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    chunks_to_zarr = xbeam.ChunksToZarr(temp_dir, template)
+    self.assertEqual(chunks_to_zarr.template.chunks, {'x': (6,)})
+    self.assertEqual(chunks_to_zarr.zarr_chunks, {'x': 3})
+    inputs | chunks_to_zarr
+    actual = xarray.open_zarr(temp_dir, consolidated=True)
+    xarray.testing.assert_identical(actual, dataset)
+
+  def test_infer_zarr_chunks(self):
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
+
+    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset)
+    self.assertEqual(chunks, {})
+
+    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset.chunk())
+    self.assertEqual(chunks, {'x': 6})
+
+    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset.head(0).chunk())
+    self.assertEqual(chunks, {'x': 0})
+
+    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset.chunk(3))
+    self.assertEqual(chunks, {'x': 3})
+
+    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset.chunk(4))
+    self.assertEqual(chunks, {'x': 4})
+
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape(
+            "Zarr cannot handle inconsistent chunk sizes along dimension 'x': "
+            '(2, 4)'
+        ),
+    ):
+      xbeam._src.zarr._infer_zarr_chunks(dataset.chunk({'x': (2, 4)}))
+
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape(
+            "Zarr cannot handle inconsistent chunk sizes along dimension 'x': "
+            '(3, 2, 1)'
+        ),
+    ):
+      xbeam._src.zarr._infer_zarr_chunks(dataset.chunk({'x': (3, 2, 1)}))
 
 
 if __name__ == '__main__':

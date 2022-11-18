@@ -12,10 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """IO with Zarr via Xarray."""
+from __future__ import annotations
 import collections
 import dataclasses
 import logging
-from typing import Any, List, Optional, Mapping, Tuple, Union, MutableMapping
+from typing import (
+    Any,
+    AbstractSet,
+    Dict,
+    Optional,
+    Mapping,
+    Set,
+    Tuple,
+    Union,
+    MutableMapping,
+)
 
 import apache_beam as beam
 import dask
@@ -89,32 +100,57 @@ def _raise_template_error():
   )
 
 
-def make_template(dataset: xarray.Dataset) -> xarray.Dataset:
-  """Make a lazy Dask xarray.Dataset for use only as a template."""
-  # TODO(shoyer): add options for customizing what becomes lazy, or consider
-  # chunking all data_vars instead of using dimensionality. This version matches
-  # xarray.Dataset.chunk(-1) in making every variable that is not indexed lazy.
+def make_template(
+    dataset: xarray.Dataset,
+    lazy_vars: Optional[AbstractSet[str]] = None,
+) -> xarray.Dataset:
+  """Make a lazy Dask xarray.Dataset for use only as a template.
 
+  Lazy variables in an xarray.Dataset can be manipulated with xarray operations,
+  but cannot be computed.
+
+  Args:
+    dataset: dataset to convert into a template.
+    lazy_vars: optional explicit set of variables to make lazy. By default, all
+      data variables and coordinates that are not used as an index are made
+      lazy, matching xarray.Dataset.chunk.
+
+  Returns:
+    Dataset with lazy variables. Lazy variable each use a single Dask chunk.
+    Non-lazy variables are loaded in memory as NumPy arrays.
+  """
+  if lazy_vars is None:
+    lazy_vars = set(dataset.keys())
+    lazy_vars.update(k for k in dataset.coords if k not in dataset.indexes)
+
+  result = dataset.copy()
+
+  # load non-lazy variables into memory
+  result.update(dataset.drop_vars(lazy_vars).compute())
+
+  # override the lazy variables
   delayed = dask.delayed(_raise_template_error)()
   name = 'make_template'
+  for k, v in dataset.variables.items():
+    if k in lazy_vars:
+      result[k].data = dask.array.from_delayed(
+          delayed, v.shape, v.dtype, name=name
+      )
 
-  data_vars = {}
-  for k, v in dataset.items():
-    data = dask.array.from_delayed(delayed, v.shape, v.dtype, name=name)
-    data_vars[k] = (v.dims, data, v.attrs)
+  return result
 
-  coords = {}
-  for k, v in dataset.coords.items():
-    data = (
-        dask.array.from_delayed(delayed, v.shape, v.dtype, name=name)
-        if k not in dataset.indexes
-        else v.data
-    )
-    coords[k] = (v.dims, data, v.attrs)
 
-  attrs = dataset.attrs
+def _unchunked_vars(ds: xarray.Dataset) -> Set[str]:
+  return {k for k, v in ds.variables.items() if v.chunks is None}
 
-  return xarray.Dataset(data_vars, coords, attrs)
+
+def _chunked_vars(ds: xarray.Dataset) -> Set[str]:
+  return set(ds.variables.keys()) - _unchunked_vars(ds)
+
+
+def _make_template_from_chunked(dataset: xarray.Dataset) -> xarray.Dataset:
+  """Create a template with lazy variables already chunked with Dask."""
+  return make_template(dataset, lazy_vars=_chunked_vars(dataset))
 
 
 class _DiscoverTemplate(beam.PTransform):
@@ -138,6 +174,9 @@ class _DiscoverTemplate(beam.PTransform):
     return template
 
   def expand(self, pcoll):
+    # TODO(shoyer): can we refactor this logic to do a hierarchical merge (i.e.,
+    # with beam.CombineGlobally), rather than combining all templates into a
+    # list on a single machine? This would help for scalability.
     return (
         pcoll
         | 'MakeChunk' >> beam.MapTuple(self._make_template_chunk)
@@ -176,6 +215,27 @@ def _override_chunks(
   }
   coords = {k: maybe_rechunk(dataset.variables[k]) for k in dataset.coords}
   return xarray.Dataset(data_vars, coords, dataset.attrs)
+
+
+def _dask_to_zarr_chunksize(dim: str, sizes: Tuple[int, ...]) -> int:
+  if not sizes:
+    return 0
+  # It's OK for the last chunk of Zarr array to have smaller size. Otherwise,
+  # there should be (at most) one chunk size.
+  size_set = set(sizes[:-1])
+  if len(size_set) > 1 or sizes[-1] > sizes[0]:
+    raise ValueError(
+        'Zarr cannot handle inconsistent chunk sizes along dimension '
+        f'{dim!r}: {sizes}'
+    )
+  return sizes[0]
+
+
+def _infer_zarr_chunks(dataset: xarray.Dataset) -> Dict[str, int]:
+  return {
+      dim: _dask_to_zarr_chunksize(dim, sizes)
+      for dim, sizes in dataset.chunks.items()
+  }
 
 
 def _setup_zarr(template, store, zarr_chunks):
@@ -240,10 +300,6 @@ def _validate_zarr_chunk(key, chunk, template, zarr_chunks):
   # Note that variable names, shapes & dtypes are verified in xarray's to_zarr()
 
 
-def _unchunked_vars(ds: xarray.Dataset) -> List[str]:
-  return [k for k, v in ds.variables.items() if v.chunks is None]
-
-
 def _write_chunk_to_zarr(key, chunk, store, template):
   """Write a single Dataset chunk to Zarr."""
   region = core.offsets_to_slices(key.offsets, chunk.sizes)
@@ -272,6 +328,7 @@ class ChunksToZarr(beam.PTransform):
       zarr_chunks: Optional[Mapping[str, int]] = None,
       num_threads: Optional[int] = None,
   ):
+    # pyformat: disable
     """Initialize ChunksToZarr.
 
     Args:
@@ -301,8 +358,12 @@ class ChunksToZarr(beam.PTransform):
         variable in a Dataset is already written in parallel, so this is most
         useful for Datasets with a small number of variables.
     """
+    # pyformat: enable
     if isinstance(template, xarray.Dataset):
       _setup_zarr(template, store, zarr_chunks)
+      if zarr_chunks is None:
+        zarr_chunks = _infer_zarr_chunks(template)
+      template = _make_template_from_chunked(template)
     elif isinstance(template, beam.pvalue.AsSingleton):
       pass
     elif template is None:
