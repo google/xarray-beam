@@ -437,7 +437,10 @@ class SplitChunks(beam.PTransform):
   target_chunks: Mapping[str, int]
 
   def _split_chunks(self, key, dataset):
-    yield from split_chunks(key, dataset, self.target_chunks)
+    target_chunks = {
+        k: v for k, v in self.target_chunks.items() if k in dataset.dims
+    }
+    yield from split_chunks(key, dataset, target_chunks)
 
   def expand(self, pcoll):
     return pcoll | beam.FlatMapTuple(self._split_chunks)
@@ -518,9 +521,9 @@ class Rechunk(beam.PTransform):
         indicate "non-chunked" dimensions.
       target_chunks: sizes of target chunks, like `source_keys`. Keys must
         exactly match those found in source_chunks.
-      itemsize: approximate number of bytes per xarray.Dataset element,
-        after indexing out by all dimensions, e.g., `4 * len(dataset)` for
-        float32 data or roughly `dataset.nbytes / np.prod(dataset.sizes)`.
+      itemsize: approximate number of bytes per xarray.Dataset element, after
+        indexing out by all dimensions, e.g., `4 * len(dataset)` for float32
+        data or roughly `dataset.nbytes / np.prod(dataset.sizes)`.
       max_mem: maximum memory that a single intermediate chunk may consume.
     """
     if source_chunks.keys() != target_chunks.keys():
