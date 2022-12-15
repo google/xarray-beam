@@ -23,7 +23,6 @@ from typing import (
   Mapping,
   Sequence,
   Tuple,
-  TypeVar,
   Union,
 )
 
@@ -266,8 +265,7 @@ def _all_equal(iterator):
   return all(first == x for x in iterator)
 
 
-T = TypeVar('T')
-AtLeastOne = Union[T, Tuple[T]]
+Chunk = Tuple[Key, Union[xarray.Dataset, Tuple[xarray.Dataset, ...]]]
 
 
 class DatasetToChunks(beam.PTransform):
@@ -312,7 +310,7 @@ class DatasetToChunks(beam.PTransform):
     if split_vars and not _all_equal([(k, v.shape) for k, v in ds.items()]
                                      for ds in dataset):
       raise ValueError('when splitting variables, all datasets must have '
-                       'the same data variables with equivalent shapes.')
+                       'the same data variables with equivalent shapes')
     if chunks is None:
       if not _all_equal(ds.chunks for ds in dataset):
         raise ValueError('all datasets must have the same chunks or chunks must be provided')
@@ -334,6 +332,10 @@ class DatasetToChunks(beam.PTransform):
     lengths = {k: len(v) for k, v in self.offsets.items()}
     self.sharded_dim = max(lengths, key=lengths.get) if lengths else None
     self.shard_count = self._shard_count()
+
+  @property
+  def _first(self) -> xarray.Dataset:
+    return self.dataset[0]
 
   def _task_count(self) -> int:
     """Count the number of tasks emitted by this transform."""
@@ -405,7 +407,7 @@ class DatasetToChunks(beam.PTransform):
         inputs.append((None, name))
     return inputs
 
-  def _key_to_chunks(self, key: Key) -> Iterator[Tuple[Key, Union[xarray.Dataset, Tuple[xarray.Dataset, ...]]]]:
+  def _key_to_chunks(self, key: Key) -> Iterator[Chunk]:
     """Convert a Key into an in-memory (Key, xarray.Dataset) pair."""
     sizes = {
         dim: self.expanded_chunks[dim][self.offset_index[dim][offset]]
@@ -424,10 +426,6 @@ class DatasetToChunks(beam.PTransform):
       yield key, results[0]
     else:
       yield key, tuple(*results)
-
-  @property
-  def _first(self) -> xarray.Dataset:
-    return self.dataset[0]
 
   def expand(self, pcoll):
     if self.shard_count is None:
