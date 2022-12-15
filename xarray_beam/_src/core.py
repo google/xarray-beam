@@ -425,7 +425,7 @@ class DatasetToChunks(beam.PTransform):
     if len(results) == 1:
       yield key, results[0]
     else:
-      yield key, tuple(*results)
+      yield key, tuple(results)
 
   def expand(self, pcoll):
     if self.shard_count is None:
