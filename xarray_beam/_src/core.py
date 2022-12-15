@@ -301,10 +301,11 @@ class DatasetToChunks(beam.PTransform):
         rather than only on the host process. This is important for scaling
         pipelines to millions of tasks.
     """
-    if type(dataset) is not tuple:
+    if type(dataset) is xarray.Dataset:
       dataset = (dataset,)
     elif not dataset:
       raise ValueError('dataset tuple cannot be empty!')
+    dataset = tuple(dataset)
     if not _all_equal(ds.sizes for ds in dataset):
       raise ValueError('all datasets must be the same size')
     if split_vars and not _all_equal([(k, v.shape) for k, v in ds.items()]
