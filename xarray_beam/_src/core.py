@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Core data model for xarray-beam."""
-from __future__ import annotations
-
 import itertools
 import math
 from typing import (
