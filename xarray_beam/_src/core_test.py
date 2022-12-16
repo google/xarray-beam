@@ -227,15 +227,6 @@ class DatasetToChunksTest(test_util.TestCase):
     expected = {'x': (3, 3, 3, 1)}
     self.assertEqual(actual, expected)
 
-  def test_datasets_are_tuples(self):
-    iter_datasets = (xarray.Dataset({'foo': ('x', np.arange(6))}) for _ in range(6))
-    list_datasets = (xarray.Dataset({'foo': ('x', np.arange(6))}) for _ in range(6))
-    vals_datasets = {i: xarray.Dataset({'foo': ('x', np.arange(6))}) for i in range(6)}
-    expected = tuple(xarray.Dataset({'foo': ('x', np.arange(6))}) for _ in range(6))
-    for iterable in [iter_datasets, list_datasets, vals_datasets.values()]:
-      actual = xbeam.DatasetToChunks(iterable, chunks={'foo': 3}).dataset
-      self.assertEqual(actual, expected)
-
   def test_dataset_to_chunks_multiple(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
     expected = [
