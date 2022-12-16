@@ -19,15 +19,15 @@ import math
 from typing import (
   AbstractSet,
   Dict,
-  List,
+  Generic,
   Iterator,
-  Optional,
+  List,
   Mapping,
+  Optional,
   Sequence,
   Tuple,
-  Union,
   TypeVar,
-  Generic,
+  Union,
 )
 
 import apache_beam as beam
