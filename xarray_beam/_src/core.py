@@ -330,22 +330,24 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
 
   @property
   def _datasets(self) -> List[xarray.Dataset]:
-    if type(self.dataset) is xarray.Dataset:
+    if isinstance(self.dataset, xarray.Dataset):
       return [self.dataset]
     return list(self.dataset)
 
   def _validate(self, dataset, split_vars):
     """Raise errors if input parameters are invalid."""
-    if not dataset and not type(xarray.Dataset):
+    if not isinstance(dataset, xarray.Dataset) and not dataset:
       raise ValueError('dataset list cannot be empty!')
-    if not _all_equal(ds.sizes for ds in self._datasets):
-      raise ValueError('all datasets must be the same size')
-    if split_vars and not _all_equal([(k, v.shape) for k, v in ds.items()]
-                                     for ds in self._datasets):
-      raise ValueError('when splitting variables, all datasets must have '
-                       'the same data variables with equivalent shapes')
-    if not _all_equal(ds.chunks for ds in self._datasets):
-      raise ValueError('all datasets must have the same chunks or chunks must be provided')
+    sizes = [ds.sizes for ds in self._datasets]
+    if len({tuple(s.items()) for s in sizes}) > 1:
+      raise ValueError(f'inconsistent dataset sizes: {sizes}')
+    dv_shapes = [tuple((k, v.shape) for k, v in ds.items())
+                 for ds in self._datasets]
+    if split_vars and len(set(dv_shapes)) > 1:
+      raise ValueError(f'when splitting variables, data_vars shapes must match across all datasets: {dv_shapes}')
+    chunks = [ds.chunks for ds in self._datasets]
+    if len({tuple(c.items()) for c in chunks}) > 1:
+      raise ValueError(f'inconsistent chunks: {chunks}')
 
   def _task_count(self) -> int:
     """Count the number of tasks emitted by this transform."""
@@ -436,7 +438,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     if type(self.dataset) is xarray.Dataset:
       yield key, results[0]
     else:
-      yield key, tuple(results)
+      yield key, list(results)
 
   def expand(self, pcoll):
     if self.shard_count is None:

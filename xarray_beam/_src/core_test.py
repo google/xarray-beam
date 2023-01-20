@@ -254,13 +254,13 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertIdenticalChunks(actual, expected)
 
   def test_datasets_to_chunks_multiple(self):
-    datasets = tuple(xarray.Dataset({'foo': ('x', np.arange(6))}) for _ in range(7))
+    datasets = [xarray.Dataset({'foo': ('x', i + np.arange(6))}) for i in range(7)]
     expected = [
-      (xbeam.Key({'x': 0}), tuple(ds.head(x=3) for ds in datasets)),
-      (xbeam.Key({'x': 3}), tuple(ds.tail(x=3) for ds in datasets)),
+      (xbeam.Key({'x': 0}), [ds.head(x=3) for ds in datasets]),
+      (xbeam.Key({'x': 3}), [ds.tail(x=3) for ds in datasets]),
     ]
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
-      tuple(ds.chunk({'x': 3}) for ds in datasets)
+      [ds.chunk({'x': 3}) for ds in datasets]
     )
     self.assertIdenticalChunks(actual, expected)
 
@@ -294,7 +294,7 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertIdenticalChunks(actual, expected)
 
   def test_datasets_to_chunks_whole(self):
-    datasets = tuple(xarray.Dataset({'foo': ('x', np.arange(6))}) for _ in range(11))
+    datasets = [xarray.Dataset({'foo': ('x', i + np.arange(6))}) for i in range(11)]
     expected = [(xbeam.Key({'x': 0}), datasets)]
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
       datasets, chunks={'x': -1}
@@ -326,18 +326,18 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertIdenticalChunks(actual, expected)
 
   def test_datasets_to_chunks_vars(self):
-    datasets = tuple(
+    datasets = [
       xarray.Dataset({
-        'foo': ('x', np.arange(6)),
-        'bar': ('x', -np.arange(6)),
+        'foo': ('x', i + np.arange(6)),
+        'bar': ('x', i - np.arange(6)),
       })
-      for _ in range(12)
-    )
+      for i in range(12)
+    ]
     expected = [
-      (xbeam.Key({'x': 0}, {'foo'}), tuple(ds.head(x=3)[['foo']] for ds in datasets)),
-      (xbeam.Key({'x': 0}, {'bar'}), tuple(ds.head(x=3)[['bar']] for ds in datasets)),
-      (xbeam.Key({'x': 3}, {'foo'}), tuple(ds.tail(x=3)[['foo']] for ds in datasets)),
-      (xbeam.Key({'x': 3}, {'bar'}), tuple(ds.tail(x=3)[['bar']] for ds in datasets)),
+      (xbeam.Key({'x': 0}, {'foo'}), [ds.head(x=3)[['foo']] for ds in datasets]),
+      (xbeam.Key({'x': 0}, {'bar'}), [ds.head(x=3)[['bar']] for ds in datasets]),
+      (xbeam.Key({'x': 3}, {'foo'}), [ds.tail(x=3)[['foo']] for ds in datasets]),
+      (xbeam.Key({'x': 3}, {'bar'}), [ds.tail(x=3)[['bar']] for ds in datasets]),
     ]
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
       datasets, chunks={'x': 3}, split_vars=True
@@ -381,7 +381,7 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertIdenticalChunks(actual, expected)
 
   def test_datasets_to_chunks_empty(self):
-    datasets = tuple(xarray.Dataset() for _ in range(5))
+    datasets = [xarray.Dataset() for _ in range(5)]
     expected = [(xbeam.Key({}), datasets)]
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(datasets)
     self.assertIdenticalChunks(actual, expected)
@@ -421,6 +421,14 @@ class DatasetToChunksTest(test_util.TestCase):
     to_chunks = xbeam.DatasetToChunks(datasets, chunks={'z': 1}, split_vars=True)
     self.assertEqual(to_chunks._task_count(), 12)
 
+  def test_validate(self):
+    # TODO(alxr): Test validation
+    # test 'chunks' is None
+    # test empty list
+    # test all dataset sizes must match
+    # test all data variable dimensions between datasets must match.
+    # test dataset chunks are inconsistent
+    pass
 
 class ValidateEachChunkTest(test_util.TestCase):
 

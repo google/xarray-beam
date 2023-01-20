@@ -61,7 +61,7 @@ class TestCase(parameterized.TestCase):
     for key in expected:
       actual_chunk, expected_chunk = actual[key], expected[key]
       self.assertEqual(type(actual_chunk), type(expected_chunk))
-      if type(actual_chunk) is not tuple:
+      if type(actual_chunk) is not list:
         actual_chunk, expected_chunk = (actual_chunk,), (expected_chunk,)
       for a, e in zip(actual_chunk, expected_chunk):
         array_assert_func(a, e)
