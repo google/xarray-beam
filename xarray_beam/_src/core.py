@@ -257,16 +257,6 @@ def normalize_expanded_chunks(
   return result
 
 
-def _all_equal(iterator):
-  """Check if all values in a collection are equal."""
-  iterator = iter(iterator)
-  try:
-    first = next(iterator)
-  except StopIteration:
-    return True
-  return all(first == x for x in iterator)
-
-
 DatasetOrDatasets = TypeVar('DatasetOrDatasets', xarray.Dataset, List[xarray.Dataset])
 
 
