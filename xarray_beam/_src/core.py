@@ -436,7 +436,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
       result = chunk.chunk().compute(num_workers=num_threads)
       results.append(result)
 
-    if type(self.dataset) is xarray.Dataset:
+    if isinstance(self.dataset, xarray.Dataset):
       yield key, results[0]
     else:
       yield key, list(results)
