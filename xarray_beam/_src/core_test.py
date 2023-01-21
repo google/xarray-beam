@@ -23,6 +23,7 @@ import xarray_beam as xbeam
 from xarray_beam._src import core
 from xarray_beam._src import test_util
 
+
 # pylint: disable=expression-not-assigned
 # pylint: disable=pointless-statement
 
@@ -462,7 +463,7 @@ class DatasetToChunksTest(test_util.TestCase):
     with self.assertRaisesWithLiteralMatch(
         ValueError,
         (
-            "inconsistent dataset sizes: "
+            'inconsistent dataset sizes: '
             "[Frozen({'x': 3, 'y': 6, 'z': 10}),"
             " Frozen({'x': 3, 'y': 6})]"
         ),
@@ -474,7 +475,7 @@ class DatasetToChunksTest(test_util.TestCase):
     with self.assertRaisesWithLiteralMatch(
         ValueError,
         (
-            "inconsistent data_var shapes when splitting variables: "
+            'inconsistent data_var shapes when splitting variables: '
             "[{'foo': (3, 6), 'bar': (3,), 'baz': (10,)},"
             " {'foo': (3, 6), 'bar': (3,), 'baz': (10,), 'qux': (3,)}]"
         ),
@@ -488,7 +489,7 @@ class DatasetToChunksTest(test_util.TestCase):
     with self.assertRaisesWithLiteralMatch(
         ValueError,
         (
-            "inconsistent chunks: "
+            'inconsistent chunks: '
             "[Frozen({'x': (1, 1, 1), 'y': (6,), 'z': (10,)}),"
             " Frozen({'x': (2, 1), 'y': (6,), 'z': (10,)})]"
         ),
@@ -523,6 +524,25 @@ class ValidateEachChunkTest(test_util.TestCase):
         ),
         e.exception.args[0],
     )
+
+  def test_unmatched_variables_multiple_datasets_raises_error(self):
+    datasets = [
+        xarray.Dataset({'foo': ('x', i + np.arange(6))}) for i in range(11)
+    ]
+    datasets[5] = datasets[5].rename({'foo': 'bar'})
+
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        (
+            "Key var(s) 'foo' in Key(offsets={'x': 0}, vars={'foo'}) "
+            f'not found in Dataset data variables: {datasets[5]} '
+            "[while running 'ValidateEachChunk/MapTuple(_validate)']"
+        ),
+    ) as e:
+      (
+          [(xbeam.Key({'x': 0}, vars={'foo'}), datasets)]
+          | xbeam.ValidateEachChunk()
+      )
 
   def test_validate_chunks_compose_in_pipeline(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
