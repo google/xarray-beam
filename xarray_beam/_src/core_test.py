@@ -265,7 +265,7 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertIdenticalChunks(actual, expected)
 
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
-      tuple(ds.chunk({'x': 3}) for ds in datasets), num_threads=2
+      [ds.chunk({'x': 3}) for ds in datasets], num_threads=2
     )
     self.assertIdenticalChunks(actual, expected)
 
@@ -275,7 +275,7 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertIdenticalChunks(actual, expected)
 
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
-      tuple(ds.chunk({'x': 3}) for ds in datasets), shard_keys_threshold=1
+      [ds.chunk({'x': 3}) for ds in datasets], shard_keys_threshold=1
     )
     self.assertIdenticalChunks(actual, expected)
 
@@ -422,13 +422,32 @@ class DatasetToChunksTest(test_util.TestCase):
     self.assertEqual(to_chunks._task_count(), 12)
 
   def test_validate(self):
-    # TODO(alxr): Test validation
-    # test 'chunks' is None
-    # test empty list
-    # test all dataset sizes must match
-    # test all data variable dimensions between datasets must match.
-    # test dataset chunks are inconsistent
-    pass
+    dataset = xarray.Dataset(
+      {
+        'foo': (('x', 'y'), np.zeros((3, 6))),
+        'bar': ('x', np.zeros(3)),
+        'baz': ('z', np.zeros(10)),
+      }
+    )
+
+    ## TODO(alxr): reproduce error
+    # with self.assertRaisesWithLiteralMatch(ValueError, 'dataset must be chunked or chunks must be provided'):
+    #   test_util.EagerPipeline() | xbeam.DatasetToChunks(dataset, chunks=None)
+
+    with self.assertRaisesWithLiteralMatch(TypeError, "'dataset' must be an 'xarray.Dataset' or 'list[xarray.Dataset]'"):
+      test_util.EagerPipeline() | xbeam.DatasetToChunks({'foo': dataset})
+
+    with self.assertRaisesWithLiteralMatch(ValueError, 'dataset list cannot be empty'):
+      test_util.EagerPipeline() | xbeam.DatasetToChunks([])
+
+    with self.assertRaisesWithLiteralMatch(ValueError, "inconsistent dataset sizes: [Frozen({'x': 3, 'y': 6, 'z': 10}), Frozen({'x': 3, 'y': 6})]"):
+      test_util.EagerPipeline() | xbeam.DatasetToChunks([dataset, dataset.drop_dims('z')])
+
+    with self.assertRaisesWithLiteralMatch(ValueError, "inconsistent data_var shapes when splitting variables: [{'foo': (3, 6), 'bar': (3,), 'baz': (10,)}, {'foo': (3, 6), 'bar': (3,), 'baz': (10,), 'qux': (3,)}]"):
+      test_util.EagerPipeline() | xbeam.DatasetToChunks([dataset, dataset.assign(qux=2*dataset.bar)], chunks={'x': 1}, split_vars=True)
+
+    with self.assertRaisesWithLiteralMatch(ValueError, "inconsistent chunks: [Frozen({'x': (1, 1, 1), 'y': (6,), 'z': (10,)}), Frozen({'x': (2, 1), 'y': (6,), 'z': (10,)})]"):
+      test_util.EagerPipeline() | xbeam.DatasetToChunks([dataset.chunk({'x': 1}), dataset.chunk({'x': 2})])
 
 class ValidateEachChunkTest(test_util.TestCase):
 

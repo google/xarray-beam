@@ -304,11 +304,11 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         pipelines to millions of tasks.
     """
     self.dataset = dataset
+    self._validate(dataset, split_vars)
     if chunks is None:
       chunks = self._first.chunks
     if chunks is None:
       raise ValueError('dataset must be chunked or chunks must be provided')
-    self._validate(dataset, split_vars)
     expanded_chunks = normalize_expanded_chunks(chunks, self._first.sizes)
     self.expanded_chunks = expanded_chunks
     self.split_vars = split_vars
@@ -336,15 +336,18 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
 
   def _validate(self, dataset, split_vars):
     """Raise errors if input parameters are invalid."""
-    if not isinstance(dataset, xarray.Dataset) and not dataset:
-      raise ValueError('dataset list cannot be empty!')
+    if not isinstance(dataset, xarray.Dataset):
+      if not (isinstance(dataset, list) and all(isinstance(ds, xarray.Dataset) for ds in dataset)):
+        raise TypeError("'dataset' must be an 'xarray.Dataset' or 'list[xarray.Dataset]'")
+      if not dataset:
+        raise ValueError('dataset list cannot be empty')
     sizes = [ds.sizes for ds in self._datasets]
     if len({tuple(s.items()) for s in sizes}) > 1:
       raise ValueError(f'inconsistent dataset sizes: {sizes}')
-    dv_shapes = [tuple((k, v.shape) for k, v in ds.items())
+    dv_shapes = [{k: v.shape for k, v in ds.items()}
                  for ds in self._datasets]
-    if split_vars and len(set(dv_shapes)) > 1:
-      raise ValueError(f'when splitting variables, data_vars shapes must match across all datasets: {dv_shapes}')
+    if split_vars and len({tuple(shape) for shape in dv_shapes}) > 1:
+      raise ValueError(f'inconsistent data_var shapes when splitting variables: {dv_shapes}')
     chunks = [ds.chunks for ds in self._datasets]
     if len({tuple(c.items()) for c in chunks}) > 1:
       raise ValueError(f'inconsistent chunks: {chunks}')
