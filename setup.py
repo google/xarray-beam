@@ -25,7 +25,6 @@ base_requires = [
     'xarray',
 ]
 docs_requires = [
-    'jinja2==3.0.3',
     'myst-nb',
     'myst-parser',
     'sphinx',
