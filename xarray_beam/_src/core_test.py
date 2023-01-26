@@ -290,12 +290,6 @@ class DatasetToChunksTest(test_util.TestCase):
     )
     self.assertIdenticalChunks(actual, expected)
 
-    actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
-        dataset, chunks={}
-    )
-    expected = [(xbeam.Key({'x': 0}), dataset)]
-    self.assertIdenticalChunks(actual, expected)
-
   def test_datasets_to_chunks_whole(self):
     datasets = [
         xarray.Dataset({'foo': ('x', i + np.arange(6))}) for i in range(11)
@@ -304,12 +298,6 @@ class DatasetToChunksTest(test_util.TestCase):
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
         datasets, chunks={'x': -1}
     )
-    self.assertIdenticalChunks(actual, expected)
-
-    actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
-        datasets, chunks={}
-    )
-    expected = [(xbeam.Key({'x': 0}), datasets)]
     self.assertIdenticalChunks(actual, expected)
 
   def test_dataset_to_chunks_vars(self):
@@ -390,13 +378,17 @@ class DatasetToChunksTest(test_util.TestCase):
   def test_dataset_to_chunks_empty(self):
     dataset = xarray.Dataset()
     expected = [(xbeam.Key({}), dataset)]
-    actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(dataset)
+    actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
+        dataset, chunks={'x': -1}
+    )
     self.assertIdenticalChunks(actual, expected)
 
   def test_datasets_to_chunks_empty(self):
     datasets = [xarray.Dataset() for _ in range(5)]
     expected = [(xbeam.Key({}), datasets)]
-    actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(datasets)
+    actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
+        datasets, chunks={'x': -1}
+    )
     self.assertIdenticalChunks(actual, expected)
 
   def test_task_count(self):
@@ -445,9 +437,10 @@ class DatasetToChunksTest(test_util.TestCase):
         'baz': ('z', np.zeros(10)),
     })
 
-    ## TODO(alxr): reproduce error
-    # with self.assertRaisesWithLiteralMatch(ValueError, 'dataset must be chunked or chunks must be provided'):
-    #   test_util.EagerPipeline() | xbeam.DatasetToChunks(dataset, chunks=None)
+    with self.assertRaisesWithLiteralMatch(
+        ValueError, 'dataset must be chunked or chunks must be provided'
+    ):
+      test_util.EagerPipeline() | xbeam.DatasetToChunks(dataset, chunks=None)
 
     with self.assertRaisesWithLiteralMatch(
         TypeError,

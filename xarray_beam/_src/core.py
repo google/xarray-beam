@@ -299,7 +299,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     self._validate(dataset, split_vars)
     if chunks is None:
       chunks = self._first.chunks
-    if chunks is None:
+    if not chunks:
       raise ValueError("dataset must be chunked or chunks must be provided")
     expanded_chunks = normalize_expanded_chunks(chunks, self._first.sizes)
     self.expanded_chunks = expanded_chunks
