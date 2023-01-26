@@ -239,7 +239,7 @@ class DatasetToZarrTest(test_util.TestCase):
     )
     temp_dir = self.create_tempdir().full_path
     with self.assertRaisesRegex(
-        ValueError, 'template does not have any variables chunked with Dask'
+        ValueError, 'dataset must be chunked or chunks must be provided'
     ):
       test_util.EagerPipeline() | xbeam.DatasetToZarr(dataset, temp_dir)
 
