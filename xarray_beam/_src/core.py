@@ -307,7 +307,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     self.num_threads = num_threads
     self.shard_keys_threshold = shard_keys_threshold
     # TODO(shoyer): consider recalculating these potentially large properties on
-    #  each worker, rather than only once on the host.
+    # each worker, rather than only once on the host.
     self.offsets = _chunks_to_offsets(expanded_chunks)
     self.offset_index = compute_offset_index(self.offsets)
     # We use the simple heuristic of only sharding inputs along the dimension
