@@ -58,6 +58,15 @@ class MeanTest(test_util.TestCase):
       (actual,) = inputs_x | xbeam.Mean.Globally(skipna=False)
       xarray.testing.assert_allclose(expected, actual)
 
+  def test_dim_globally(self):
+    inputs = [
+        xarray.Dataset({'x': ('time', [1, 2])}),
+        xarray.Dataset({'x': ('time', [3])}),
+    ]
+    expected = xarray.Dataset({'x': 2.0})
+    (actual,) = inputs | xbeam.Mean.Globally(dim='time')
+    xarray.testing.assert_allclose(expected, actual)
+
   def test_per_key(self):
     inputs = [
         (0, xarray.Dataset({'x': 1})),
@@ -70,6 +79,44 @@ class MeanTest(test_util.TestCase):
         (1, xarray.Dataset({'x': 3.5})),
     ]
     actual = inputs | xbeam.Mean.PerKey()
+    self.assertAllCloseChunks(actual, expected)
+
+  def test_mean_1d(self):
+    inputs = [
+        (xbeam.Key({'x': 0}), xarray.Dataset({'y': ('x', [1, 2, 3])})),
+        (xbeam.Key({'x': 3}), xarray.Dataset({'y': ('x', [4, 5, 6])})),
+    ]
+    expected = [
+        (xbeam.Key({}), xarray.Dataset({'y': 3.5})),
+    ]
+    actual = inputs | xbeam.Mean('x')
+    self.assertAllCloseChunks(actual, expected)
+    actual = inputs | xbeam.Mean(['x'])
+    self.assertAllCloseChunks(actual, expected)
+
+  def test_mean_2d(self):
+    inputs = [
+        (xbeam.Key({'y': 0}), xarray.Dataset({'z': (('x', 'y'), [[1, 2, 3]])})),
+        (xbeam.Key({'y': 3}), xarray.Dataset({'z': (('x', 'y'), [[4, 5, 6]])})),
+    ]
+
+    expected = [
+        (xbeam.Key({'y': 0}), xarray.Dataset({'z': ('y', [1, 2, 3])})),
+        (xbeam.Key({'y': 3}), xarray.Dataset({'z': ('y', [4, 5, 6])})),
+    ]
+    actual = inputs | xbeam.Mean('x')
+    self.assertAllCloseChunks(actual, expected)
+
+    expected = [
+        (xbeam.Key({}), xarray.Dataset({'z': (('x',), [3.5])})),
+    ]
+    actual = inputs | xbeam.Mean('y')
+    self.assertAllCloseChunks(actual, expected)
+
+    expected = [
+        (xbeam.Key({}), xarray.Dataset({'z': 3.5})),
+    ]
+    actual = inputs | xbeam.Mean(['x', 'y'])
     self.assertAllCloseChunks(actual, expected)
 
 

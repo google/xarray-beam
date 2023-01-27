@@ -32,6 +32,7 @@
 .. autosummary::
     :toctree: _autosummary
 
+    Mean
     Mean.Globally
     Mean.PerKey
     MeanCombineFn

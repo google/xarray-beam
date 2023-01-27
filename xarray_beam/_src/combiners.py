@@ -12,35 +12,55 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Combiners for xarray-beam."""
+from __future__ import annotations
 import dataclasses
-from typing import Any
+import functools
+from typing import Optional, Sequence, Union
 
 import apache_beam as beam
+import numpy.typing as npt
+import xarray
+
+from xarray_beam._src import core
 
 
 # TODO(shoyer): add other combiners: sum, std, var, min, max, etc.
+
+
+DimLike = Optional[Union[str, Sequence[str]]]
 
 
 @dataclasses.dataclass
 class MeanCombineFn(beam.transforms.CombineFn):
   """CombineFn for computing an arithmetic mean of xarray.Dataset objects."""
 
+  dim: DimLike = None
   skipna: bool = True
-  dtype: Any = None
+  dtype: Optional[npt.DTypeLike] = None
 
   def create_accumulator(self):
     return (0, 0)
 
   def add_input(self, sum_count, element):
     (sum_, count) = sum_count
+
     if self.dtype is not None:
       element = element.astype(self.dtype)
+
     if self.skipna:
-      new_sum = sum_ + element.fillna(0)
-      new_count = count + element.notnull()
+      sum_increment = element.fillna(0)
+      count_increment = element.notnull()
     else:
-      new_sum = sum_ + element
-      new_count = count + 1
+      sum_increment = element
+      count_increment = xarray.ones_like(element)
+
+    if self.dim is not None:
+      sum_increment = sum_increment.sum(self.dim)
+      count_increment = count_increment.sum(self.dim)
+
+    new_sum = sum_ + sum_increment
+    new_count = count + count_increment
+
     return new_sum, new_count
 
   def merge_accumulators(self, accumulators):
@@ -55,27 +75,48 @@ class MeanCombineFn(beam.transforms.CombineFn):
     return self
 
 
-class Mean:
-  """Combiners for computing arithmetic means of xarray.Dataset objects."""
+@dataclasses.dataclass
+class Mean(beam.PTransform):
+  """Calculate the mean over one or more distributed dataset dimensions."""
+
+  dim: Union[str, Sequence[str]]
+  skipna: bool = True
+  dtype: Optional[npt.DTypeLike] = None
+
+  def _update_key(
+      self, key: core.Key, chunk: xarray.Dataset
+  ) -> tuple[core.Key, xarray.Dataset]:
+    dims = [self.dim] if isinstance(self.dim, str) else self.dim
+    new_key = key.with_offsets(**{d: None for d in dims if d in key.offsets})
+    return new_key, chunk
+
+  def expand(self, pcoll):
+    return (
+        pcoll
+        | beam.MapTuple(self._update_key)
+        | Mean.PerKey(self.dim, self.skipna, self.dtype)
+    )
 
   @dataclasses.dataclass
   class Globally(beam.PTransform):
-    """Calculate the global mean over a pcollection."""
+    """Calculate global mean over a pcollection of xarray.Dataset objects."""
 
+    dim: DimLike = None
     skipna: bool = True
-    dtype: Any = None
+    dtype: Optional[npt.DTypeLike] = None
 
     def expand(self, pcoll):
-      combine_fn = MeanCombineFn(self.skipna, self.dtype)
+      combine_fn = MeanCombineFn(self.dim, self.skipna, self.dtype)
       return pcoll | beam.CombineGlobally(combine_fn)
 
   @dataclasses.dataclass
   class PerKey(beam.PTransform):
-    """Calculate the per-key mean over a pcollection."""
+    """Calculate per-key mean over a pcollection of (hashable, Dataset)."""
 
+    dim: DimLike = None
     skipna: bool = True
-    dtype: Any = None
+    dtype: Optional[npt.DTypeLike] = None
 
     def expand(self, pcoll):
-      combine_fn = MeanCombineFn(self.skipna, self.dtype)
+      combine_fn = MeanCombineFn(self.dim, self.skipna, self.dtype)
       return pcoll | beam.CombinePerKey(combine_fn)

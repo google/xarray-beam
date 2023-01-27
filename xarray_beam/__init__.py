@@ -14,8 +14,8 @@
 """Public API for Xarray-Beam."""
 
 # pylint: disable=g-multiple-import
-from xarray_beam import Mean
 from xarray_beam._src.combiners import (
+    Mean,
     MeanCombineFn,
 )
 from xarray_beam._src.core import (
