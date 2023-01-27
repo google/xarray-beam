@@ -59,7 +59,12 @@ class TestCase(parameterized.TestCase):
     expected = dict(expected)
     self.assertCountEqual(expected, actual, msg='inconsistent keys')
     for key in expected:
-      array_assert_func(actual[key], expected[key])
+      actual_chunk, expected_chunk = actual[key], expected[key]
+      self.assertEqual(type(actual_chunk), type(expected_chunk))
+      if type(actual_chunk) is not list:
+        actual_chunk, expected_chunk = (actual_chunk,), (expected_chunk,)
+      for a, e in zip(actual_chunk, expected_chunk):
+        array_assert_func(a, e)
 
   def assertIdenticalChunks(self, actual, expected):
     self._assert_chunks(xarray.testing.assert_identical, actual, expected)

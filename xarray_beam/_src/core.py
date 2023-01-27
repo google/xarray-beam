@@ -17,12 +17,14 @@ import math
 from typing import (
     AbstractSet,
     Dict,
-    List,
+    Generic,
     Iterator,
-    Optional,
+    List,
     Mapping,
+    Optional,
     Sequence,
     Tuple,
+    TypeVar,
     Union,
 )
 
@@ -95,7 +97,7 @@ class Key:
     if offsets is None:
       offsets = {}
     if isinstance(vars, str):
-      raise TypeError(f'vars must be a set or None, but is {vars!r}')
+      raise TypeError(f"vars must be a set or None, but is {vars!r}")
     self.offsets = immutabledict.immutabledict(offsets)
     self.vars = None if vars is None else frozenset(vars)
 
@@ -103,14 +105,14 @@ class Key:
       self,
       offsets: Union[Mapping[str, int], object] = _DEFAULT,
       vars: Union[AbstractSet[str], None, object] = _DEFAULT,
-  ) -> 'Key':
+  ) -> "Key":
     if offsets is _DEFAULT:
       offsets = self.offsets
     if vars is _DEFAULT:
       vars = self.vars
     return type(self)(offsets, vars)
 
-  def with_offsets(self, **offsets: Optional[int]) -> 'Key':
+  def with_offsets(self, **offsets: Optional[int]) -> "Key":
     new_offsets = dict(self.offsets)
     for k, v in offsets.items():
       if v is None:
@@ -122,7 +124,7 @@ class Key:
   def __repr__(self) -> str:
     offsets = dict(self.offsets)
     vars = set(self.vars) if self.vars is not None else None
-    return f'{type(self).__name__}(offsets={offsets}, vars={vars})'
+    return f"{type(self).__name__}(offsets={offsets}, vars={vars})"
 
   def __hash__(self) -> int:
     return hash((self.offsets, self.vars))
@@ -179,8 +181,8 @@ def offsets_to_slices(
   missing_chunk_sizes = [k for k in offsets.keys() if k not in sizes]
   if missing_chunk_sizes:
     raise ValueError(
-        'some dimensions have offsets specified but no dimension sizes: '
-        f'offsets={offsets} and sizes={sizes}'
+        "some dimensions have offsets specified but no dimension sizes: "
+        f"offsets={offsets} and sizes={sizes}"
     )
   for k, size in sizes.items():
     offset = offsets.get(k, 0) - base.get(k, 0)
@@ -243,8 +245,8 @@ def normalize_expanded_chunks(
       total = sum(chunks[dim])
       if total != dim_size:
         raise ValueError(
-            f'sum of provided chunks does not match size of dimension {dim}: '
-            f'{total} vs {dim_size}'
+            f"sum of provided chunks does not match size of dimension {dim}: "
+            f"{total} vs {dim_size}"
         )
       result[dim] = chunks[dim]
     else:
@@ -255,12 +257,17 @@ def normalize_expanded_chunks(
   return result
 
 
-class DatasetToChunks(beam.PTransform):
-  """Split an xarray.Dataset into keyed chunks."""
+DatasetOrDatasets = TypeVar(
+    "DatasetOrDatasets", xarray.Dataset, List[xarray.Dataset]
+)
+
+
+class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
+  """Split one or more xarray.Datasets into keyed chunks."""
 
   def __init__(
       self,
-      dataset: xarray.Dataset,
+      dataset: DatasetOrDatasets,
       chunks: Optional[Mapping[str, Union[int, Tuple[int, ...]]]] = None,
       split_vars: bool = False,
       num_threads: Optional[int] = None,
@@ -269,13 +276,14 @@ class DatasetToChunks(beam.PTransform):
     """Initialize DatasetToChunks.
 
     Args:
-      dataset: dataset to split into (Key, xarray.Dataset) pairs.
+      dataset: dataset or datasets to split into (Key, xarray.Dataset) or
+        (Key, [xarray.Dataset, ...]) pairs.
       chunks: optional chunking scheme. Required if the dataset is *not* already
         chunked. If the dataset *is* already chunked with Dask, `chunks` takes
         precedence over the existing chunks.
       split_vars: whether to split the dataset into separate records for each
         data variable or to keep all data variables together. This is
-        recommended if you don't need perform joint operations on different
+        recommended if you don't need to perform joint operations on different
         dataset variables and individual variable chunks are sufficiently large.
       num_threads: optional number of Dataset chunks to load in parallel per
         worker. More threads can increase throughput, but also increases memory
@@ -287,12 +295,13 @@ class DatasetToChunks(beam.PTransform):
         rather than only on the host process. This is important for scaling
         pipelines to millions of tasks.
     """
-    if chunks is None:
-      chunks = dataset.chunks
-    if chunks is None:
-      raise ValueError('dataset must be chunked or chunks must be provided')
-    expanded_chunks = normalize_expanded_chunks(chunks, dataset.sizes)
     self.dataset = dataset
+    self._validate(dataset, split_vars)
+    if chunks is None:
+      chunks = self._first.chunks
+    if not chunks:
+      raise ValueError("dataset must be chunked or chunks must be provided")
+    expanded_chunks = normalize_expanded_chunks(chunks, self._first.sizes)
     self.expanded_chunks = expanded_chunks
     self.split_vars = split_vars
     self.num_threads = num_threads
@@ -307,13 +316,47 @@ class DatasetToChunks(beam.PTransform):
     self.sharded_dim = max(lengths, key=lengths.get) if lengths else None
     self.shard_count = self._shard_count()
 
+  @property
+  def _first(self) -> xarray.Dataset:
+    return self._datasets[0]
+
+  @property
+  def _datasets(self) -> List[xarray.Dataset]:
+    if isinstance(self.dataset, xarray.Dataset):
+      return [self.dataset]
+    return list(self.dataset)
+
+  def _validate(self, dataset, split_vars):
+    """Raise errors if input parameters are invalid."""
+    if not isinstance(dataset, xarray.Dataset):
+      if not (
+          isinstance(dataset, list)
+          and all(isinstance(ds, xarray.Dataset) for ds in dataset)
+      ):
+        raise TypeError(
+            "'dataset' must be an 'xarray.Dataset' or 'list[xarray.Dataset]'"
+        )
+      if not dataset:
+        raise ValueError("dataset list cannot be empty")
+    sizes = [ds.sizes for ds in self._datasets]
+    if len({tuple(s.items()) for s in sizes}) > 1:
+      raise ValueError(f"inconsistent dataset sizes: {sizes}")
+    dv_shapes = [{k: v.shape for k, v in ds.items()} for ds in self._datasets]
+    if split_vars and len({tuple(shape) for shape in dv_shapes}) > 1:
+      raise ValueError(
+          f"inconsistent data_var shapes when splitting variables: {dv_shapes}"
+      )
+    chunks = [ds.chunks for ds in self._datasets]
+    if len({tuple(c.items()) for c in chunks}) > 1:
+      raise ValueError(f"inconsistent chunks: {chunks}")
+
   def _task_count(self) -> int:
     """Count the number of tasks emitted by this transform."""
     counts = {k: len(v) for k, v in self.expanded_chunks.items()}
     if not self.split_vars:
       return int(np.prod(list(counts.values())))
     total = 0
-    for variable in self.dataset.values():
+    for variable in self._first.values():
       count_list = [v for k, v in counts.items() if k in variable.dims]
       total += int(np.prod(count_list))
     return total
@@ -328,7 +371,7 @@ class DatasetToChunks(beam.PTransform):
       return math.ceil(task_count / self.shard_keys_threshold)
 
     var_count = sum(
-        self.sharded_dim in var.dims for var in self.dataset.values()
+        self.sharded_dim in var.dims for var in self._first.values()
     )
     return math.ceil(task_count / (var_count * self.shard_keys_threshold))
 
@@ -337,7 +380,7 @@ class DatasetToChunks(beam.PTransform):
     if not self.split_vars:
       yield from iter_chunk_keys(self.offsets)
     else:
-      for name, variable in self.dataset.items():
+      for name, variable in self._first.items():
         relevant_offsets = {
             k: v for k, v in self.offsets.items() if k in variable.dims
         }
@@ -350,7 +393,7 @@ class DatasetToChunks(beam.PTransform):
     if var_name is None:
       offsets = self.offsets
     else:
-      offsets = {dim: self.offsets[dim] for dim in self.dataset[var_name].dims}
+      offsets = {dim: self.offsets[dim] for dim in self._first[var_name].dims}
 
     if shard_id is None:
       assert self.split_vars
@@ -370,26 +413,33 @@ class DatasetToChunks(beam.PTransform):
       return [(i, None) for i in range(self.shard_count)]
 
     inputs = []
-    for name, variable in self.dataset.items():
+    for name, variable in self._first.items():
       if self.sharded_dim in variable.dims:
         inputs.extend([(i, name) for i in range(self.shard_count)])
       else:
         inputs.append((None, name))
     return inputs
 
-  def _key_to_chunks(self, key: Key) -> Iterator[Tuple[Key, xarray.Dataset]]:
+  def _key_to_chunks(self, key: Key) -> Iterator[Tuple[Key, DatasetOrDatasets]]:
     """Convert a Key into an in-memory (Key, xarray.Dataset) pair."""
     sizes = {
         dim: self.expanded_chunks[dim][self.offset_index[dim][offset]]
         for dim, offset in key.offsets.items()
     }
     slices = offsets_to_slices(key.offsets, sizes)
-    dataset = self.dataset if key.vars is None else self.dataset[list(key.vars)]
-    chunk = dataset.isel(slices)
-    # Load the data, using a separate thread for each variable
-    num_threads = len(self.dataset)
-    result = chunk.chunk().compute(num_workers=num_threads)
-    yield key, result
+    results = []
+    for ds in self._datasets:
+      dataset = ds if key.vars is None else ds[list(key.vars)]
+      chunk = dataset.isel(slices)
+      # Load the data, using a separate thread for each variable
+      num_threads = len(dataset)
+      result = chunk.chunk().compute(num_workers=num_threads)
+      results.append(result)
+
+    if isinstance(self.dataset, xarray.Dataset):
+      yield key, results[0]
+    else:
+      yield key, list(results)
 
   def expand(self, pcoll):
     if self.shard_count is None:
@@ -401,32 +451,38 @@ class DatasetToChunks(beam.PTransform):
       key_pcoll = (
           pcoll
           | beam.Create(self._shard_inputs())
-          | 'GenerateKeys' >> beam.FlatMapTuple(self._iter_shard_keys)
+          | "GenerateKeys" >> beam.FlatMapTuple(self._iter_shard_keys)
           | beam.Reshuffle()
       )
 
-    return key_pcoll | 'KeyToChunks' >> threadmap.FlatThreadMap(
+    return key_pcoll | "KeyToChunks" >> threadmap.FlatThreadMap(
         self._key_to_chunks, num_threads=self.num_threads
     )
 
 
-def validate_chunk(key: Key, dataset: xarray.Dataset) -> None:
-  """Verify that keys correpond to Dataset properties."""
-  missing_keys = [repr(k) for k in key.offsets.keys() if k not in dataset.dims]
-  if missing_keys:
-    raise ValueError(
-        f"Key offset(s) {', '.join(missing_keys)} in {key} not found in Dataset"
-        f' dimensions: {dataset!r}'
-    )
+def validate_chunk(key: Key, datasets: DatasetOrDatasets) -> None:
+  """Verify that keys correspond to Dataset properties."""
+  if isinstance(datasets, xarray.Dataset):
+    datasets: list[xarray.Dataset] = [datasets]
+  for dataset in datasets:
+    missing_keys = [
+        repr(k) for k in key.offsets.keys() if k not in dataset.dims
+    ]
+    if missing_keys:
+      raise ValueError(
+          f"Key offset(s) {', '.join(missing_keys)} in {key} not found in"
+          f" Dataset dimensions: {dataset!r}"
+      )
 
-  if key.vars is None:
-    return
-  missing_vars = [repr(v) for v in key.vars if v not in dataset.data_vars]
-  if missing_vars:
-    raise ValueError(
-        f"Key var(s) {', '.join(missing_vars)} in {key} not found in Dataset"
-        f' data variables: {dataset!r}'
-    )
+    if key.vars is None:
+      continue
+
+    missing_vars = [repr(v) for v in key.vars if v not in dataset.data_vars]
+    if missing_vars:
+      raise ValueError(
+          f"Key var(s) {', '.join(missing_vars)} in {key} not found in Dataset"
+          f" data variables: {dataset!r}"
+      )
 
 
 class ValidateEachChunk(beam.PTransform):
