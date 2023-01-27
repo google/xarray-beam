@@ -463,7 +463,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
 def validate_chunk(key: Key, datasets: DatasetOrDatasets) -> None:
   """Verify that keys correspond to Dataset properties."""
   if isinstance(datasets, xarray.Dataset):
-    datasets = [datasets]
+    datasets: list[xarray.Dataset] = [datasets]
   for dataset in datasets:
     missing_keys = [
         repr(k) for k in key.offsets.keys() if k not in dataset.dims
