@@ -456,14 +456,21 @@ class DatasetToChunksTest(test_util.TestCase):
     with self.assertRaisesWithLiteralMatch(
         ValueError,
         (
-            'inconsistent dataset sizes: '
-            "[Frozen({'x': 3, 'y': 6, 'z': 10}),"
-            " Frozen({'x': 3, 'y': 6})]"
+            'inconsistent dataset sizes, only the first can be greater: '
+            "[Frozen({'x': 3, 'y': 6}),"
+            " Frozen({'x': 3, 'y': 6, 'z': 10})]"
         ),
     ):
       test_util.EagerPipeline() | xbeam.DatasetToChunks(
-          [dataset, dataset.drop_dims('z')]
+          [dataset.drop_dims('z'), dataset], chunks={'x': 1}
       )
+
+    try:
+      test_util.EagerPipeline() | xbeam.DatasetToChunks(
+        [dataset, dataset.drop_dims('y')], chunks={'x': 1}
+      )
+    except ValueError:
+      self.fail('should allow a pipeline where the first has more dimensions.')
 
     with self.assertRaisesWithLiteralMatch(
         ValueError,
@@ -478,6 +485,13 @@ class DatasetToChunksTest(test_util.TestCase):
           chunks={'x': 1},
           split_vars=True,
       )
+
+    try:
+      test_util.EagerPipeline() | xbeam.DatasetToChunks(
+        [dataset, dataset.drop_dims('z')], chunks={'x': 1}, split_vars=True,
+      )
+    except ValueError:
+      self.fail('should allow a pipeline where the first has more dimensions.')
 
     with self.assertRaisesWithLiteralMatch(
         ValueError,

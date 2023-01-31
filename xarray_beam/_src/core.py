@@ -340,12 +340,14 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         raise ValueError("dataset list cannot be empty")
     sizes = [ds.sizes for ds in self._datasets]
     if len({tuple(s.items()) for s in sizes}) > 1:
-      raise ValueError(f"inconsistent dataset sizes: {sizes}")
+      if any(len(sizes[0]) < len(s) for s in sizes[1:]):
+        raise ValueError(f"inconsistent dataset sizes, only the first can be greater: {sizes}")
     dv_shapes = [{k: v.shape for k, v in ds.items()} for ds in self._datasets]
     if split_vars and len({tuple(shape) for shape in dv_shapes}) > 1:
-      raise ValueError(
-          f"inconsistent data_var shapes when splitting variables: {dv_shapes}"
-      )
+      if any(len(dv_shapes[0].keys()) < len(dvs.keys()) for dvs in dv_shapes[1:]):
+        raise ValueError(
+            f"inconsistent data_var shapes when splitting variables: {dv_shapes}"
+        )
     chunks = [ds.chunks for ds in self._datasets]
     if len({tuple(c.items()) for c in chunks}) > 1:
       raise ValueError(f"inconsistent chunks: {chunks}")
@@ -430,7 +432,8 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     results = []
     for ds in self._datasets:
       dataset = ds if key.vars is None else ds[list(key.vars)]
-      chunk = dataset.isel(slices)
+      valid_slices = {k: v for k, v in slices.items() if k in dataset.dims}
+      chunk = dataset.isel(valid_slices)
       # Load the data, using a separate thread for each variable
       num_threads = len(dataset)
       result = chunk.chunk().compute(num_workers=num_threads)
