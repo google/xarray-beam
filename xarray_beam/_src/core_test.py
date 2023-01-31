@@ -467,7 +467,7 @@ class DatasetToChunksTest(test_util.TestCase):
 
     try:
       test_util.EagerPipeline() | xbeam.DatasetToChunks(
-        [dataset, dataset.drop_dims('y')], chunks={'x': 1}
+        [dataset, dataset.isel(z=0, drop=True)], chunks={'x': 1}
       )
     except ValueError:
       self.fail('should allow a pipeline where the first has more dimensions.')
@@ -488,7 +488,7 @@ class DatasetToChunksTest(test_util.TestCase):
 
     try:
       test_util.EagerPipeline() | xbeam.DatasetToChunks(
-        [dataset, dataset.drop_dims('z')], chunks={'x': 1}, split_vars=True,
+        [dataset, dataset.isel(y=0, drop=True)], chunks={'x': 1}, split_vars=True,
       )
     except ValueError:
       self.fail('should allow a pipeline where the first has more dimensions.')
