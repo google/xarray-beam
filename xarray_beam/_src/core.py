@@ -338,16 +338,23 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         )
       if not dataset:
         raise ValueError("dataset list cannot be empty")
-    sizes = [ds.sizes for ds in self._datasets]
-    if len({tuple(s.items()) for s in sizes}) > 1:
-      if any(len(sizes[0]) < len(s) for s in sizes[1:]):
-        raise ValueError(f"inconsistent dataset sizes, only the first can be greater: {sizes}")
-    dv_shapes = [{k: v.shape for k, v in ds.items()} for ds in self._datasets]
-    if split_vars and len({tuple(shape) for shape in dv_shapes}) > 1:
-      if any(len(dv_shapes[0].keys()) < len(dvs.keys()) for dvs in dv_shapes[1:]):
-        raise ValueError(
-            f"inconsistent data_var shapes when splitting variables: {dv_shapes}"
-        )
+    for ds in self._datasets[1:]:
+      for dim, size in ds.sizes.items():
+        if dim not in self._first.dims:
+          raise ValueError(
+              f"dimension {dim} does not appear on the first dataset"
+          )
+        if size != self._first.sizes[dim]:
+          raise ValueError(
+              f"dimension {dim} has an inconsistent size on different datasets"
+          )
+    if split_vars:
+      for ds in self._datasets:
+        if not ds.keys() <= self._first.keys():
+          raise ValueError(
+              "inconsistent data_vars when splitting variables:"
+              f" {tuple(ds.keys())} != {tuple(self._first.keys())}"
+          )
     chunks = [ds.chunks for ds in self._datasets]
     if len({tuple(c.items()) for c in chunks}) > 1:
       raise ValueError(f"inconsistent chunks: {chunks}")

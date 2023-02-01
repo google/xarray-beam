@@ -455,19 +455,23 @@ class DatasetToChunksTest(test_util.TestCase):
 
     with self.assertRaisesWithLiteralMatch(
         ValueError,
-        (
-            'inconsistent dataset sizes, only the first can be greater: '
-            "[Frozen({'x': 3, 'y': 6}),"
-            " Frozen({'x': 3, 'y': 6, 'z': 10})]"
-        ),
+        'dimension z does not appear on the first dataset',
     ):
       test_util.EagerPipeline() | xbeam.DatasetToChunks(
           [dataset.drop_dims('z'), dataset], chunks={'x': 1}
       )
 
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        'dimension z has an inconsistent size on different datasets',
+    ):
+      test_util.EagerPipeline() | xbeam.DatasetToChunks(
+          [dataset.isel(z=slice(5, 10), drop=True), dataset], chunks={'x': 1}
+      )
+
     try:
       test_util.EagerPipeline() | xbeam.DatasetToChunks(
-        [dataset, dataset.isel(z=0, drop=True)], chunks={'x': 1}
+          [dataset, dataset.isel(z=0, drop=True)], chunks={'x': 1}
       )
     except ValueError:
       self.fail('should allow a pipeline where the first has more dimensions.')
@@ -475,9 +479,8 @@ class DatasetToChunksTest(test_util.TestCase):
     with self.assertRaisesWithLiteralMatch(
         ValueError,
         (
-            'inconsistent data_var shapes when splitting variables: '
-            "[{'foo': (3, 6), 'bar': (3,), 'baz': (10,)},"
-            " {'foo': (3, 6), 'bar': (3,), 'baz': (10,), 'qux': (3,)}]"
+            'inconsistent data_vars when splitting variables: '
+            "('foo', 'bar', 'baz', 'qux') != ('foo', 'bar', 'baz')"
         ),
     ):
       test_util.EagerPipeline() | xbeam.DatasetToChunks(
@@ -488,7 +491,9 @@ class DatasetToChunksTest(test_util.TestCase):
 
     try:
       test_util.EagerPipeline() | xbeam.DatasetToChunks(
-        [dataset, dataset.isel(y=0, drop=True)], chunks={'x': 1}, split_vars=True,
+          [dataset, dataset.isel(y=0, drop=True)],
+          chunks={'x': 1},
+          split_vars=True,
       )
     except ValueError:
       self.fail('should allow a pipeline where the first has more dimensions.')
