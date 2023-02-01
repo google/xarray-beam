@@ -355,9 +355,6 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
               "inconsistent data_vars when splitting variables:"
               f" {tuple(ds.keys())} != {tuple(self._first.keys())}"
           )
-    chunks = [ds.chunks for ds in self._datasets]
-    if len({tuple(c.items()) for c in chunks}) > 1:
-      raise ValueError(f"inconsistent chunks: {chunks}")
 
   def _task_count(self) -> int:
     """Count the number of tasks emitted by this transform."""

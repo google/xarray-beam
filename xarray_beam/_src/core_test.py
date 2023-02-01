@@ -498,18 +498,6 @@ class DatasetToChunksTest(test_util.TestCase):
     except ValueError:
       self.fail('should allow a pipeline where the first has more dimensions.')
 
-    with self.assertRaisesWithLiteralMatch(
-        ValueError,
-        (
-            'inconsistent chunks: '
-            "[Frozen({'x': (1, 1, 1), 'y': (6,), 'z': (10,)}),"
-            " Frozen({'x': (2, 1), 'y': (6,), 'z': (10,)})]"
-        ),
-    ):
-      test_util.EagerPipeline() | xbeam.DatasetToChunks(
-          [dataset.chunk({'x': 1}), dataset.chunk({'x': 2})]
-      )
-
 
 class ValidateEachChunkTest(test_util.TestCase):
 
