@@ -338,17 +338,23 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         )
       if not dataset:
         raise ValueError("dataset list cannot be empty")
-    sizes = [ds.sizes for ds in self._datasets]
-    if len({tuple(s.items()) for s in sizes}) > 1:
-      raise ValueError(f"inconsistent dataset sizes: {sizes}")
-    dv_shapes = [{k: v.shape for k, v in ds.items()} for ds in self._datasets]
-    if split_vars and len({tuple(shape) for shape in dv_shapes}) > 1:
-      raise ValueError(
-          f"inconsistent data_var shapes when splitting variables: {dv_shapes}"
-      )
-    chunks = [ds.chunks for ds in self._datasets]
-    if len({tuple(c.items()) for c in chunks}) > 1:
-      raise ValueError(f"inconsistent chunks: {chunks}")
+    for ds in self._datasets[1:]:
+      for dim, size in ds.sizes.items():
+        if dim not in self._first.dims:
+          raise ValueError(
+              f"dimension {dim} does not appear on the first dataset"
+          )
+        if size != self._first.sizes[dim]:
+          raise ValueError(
+              f"dimension {dim} has an inconsistent size on different datasets"
+          )
+    if split_vars:
+      for ds in self._datasets:
+        if not ds.keys() <= self._first.keys():
+          raise ValueError(
+              "inconsistent data_vars when splitting variables:"
+              f" {tuple(ds.keys())} != {tuple(self._first.keys())}"
+          )
 
   def _task_count(self) -> int:
     """Count the number of tasks emitted by this transform."""
@@ -430,7 +436,8 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     results = []
     for ds in self._datasets:
       dataset = ds if key.vars is None else ds[list(key.vars)]
-      chunk = dataset.isel(slices)
+      valid_slices = {k: v for k, v in slices.items() if k in dataset.dims}
+      chunk = dataset.isel(valid_slices)
       # Load the data, using a separate thread for each variable
       num_threads = len(dataset)
       result = chunk.chunk().compute(num_workers=num_threads)
