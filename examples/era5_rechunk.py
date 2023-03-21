@@ -20,7 +20,7 @@ import xarray_beam as xbeam
 
 INPUT_PATH = flags.DEFINE_string('input_path', None, help='Input Zarr path')
 OUTPUT_PATH = flags.DEFINE_string('output_path', None, help='Output Zarr path')
-RUNNER = flags.DEFINE_string('runner', None, 'beam.runners.Runner')
+RUNNER = flags.DEFINE_string('runner', None, help='beam.runners.Runner')
 
 
 # pylint: disable=expression-not-assigned

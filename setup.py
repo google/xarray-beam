@@ -20,7 +20,7 @@ base_requires = [
     'apache_beam>=2.31.0',
     'dask',
     'immutabledict',
-    'rechunker',
+    'rechunker>=0.5.1',
     'zarr',
     'xarray',
 ]
@@ -42,7 +42,7 @@ tests_requires = [
 
 setuptools.setup(
     name='xarray-beam',
-    version='0.5.1',
+    version='0.6.0',
     license='Apache 2.0',
     author='Google LLC',
     author_email='noreply@google.com',

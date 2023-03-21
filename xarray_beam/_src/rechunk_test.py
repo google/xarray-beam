@@ -63,22 +63,24 @@ class RechunkTest(test_util.TestCase):
 
   def test_rechunking_plan(self):
     # this trivial case fits entirely into memory
-    plan = rechunk.rechunking_plan(
+    plan, = rechunk.rechunking_plan(
         dim_sizes={'x': 10, 'y': 20},
         source_chunks={'x': 1, 'y': 20},
         target_chunks={'x': 10, 'y': 1},
         itemsize=1,
+        min_mem=0,
         max_mem=200,
     )
     expected = [{'x': 10, 'y': 20}] * 3
     self.assertEqual(plan, expected)
 
     # this harder case doesn't
-    read_chunks, _, write_chunks = rechunk.rechunking_plan(
+    (read_chunks, _, write_chunks), = rechunk.rechunking_plan(
         dim_sizes={'t': 1000, 'x': 200, 'y': 300},
         source_chunks={'t': 1, 'x': 200, 'y': 300},
         target_chunks={'t': 1000, 'x': 20, 'y': 20},
         itemsize=8,
+        min_mem=0,
         max_mem=10_000_000,
     )
     self.assertGreater(read_chunks['t'], 1)
@@ -87,6 +89,17 @@ class RechunkTest(test_util.TestCase):
     self.assertEqual(write_chunks['t'], 1000)
     self.assertGreater(read_chunks['x'], 20)
     self.assertGreater(read_chunks['y'], 20)
+
+    # multiple stages
+    stages = rechunk.rechunking_plan(
+        dim_sizes={'t': 1000, 'x': 200, 'y': 300},
+        source_chunks={'t': 1, 'x': 200, 'y': 300},
+        target_chunks={'t': 1000, 'x': 20, 'y': 20},
+        itemsize=8,
+        min_mem=1_000_000,
+        max_mem=10_000_000,
+    )
+    self.assertGreater(len(stages), 1)
 
   def test_consolidate_and_split_chunks(self):
     consolidated = [
