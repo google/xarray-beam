@@ -379,7 +379,7 @@ class DatasetToChunksTest(test_util.TestCase):
     dataset = xarray.Dataset()
     expected = [(xbeam.Key({}), dataset)]
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
-        dataset, chunks={'x': -1}
+        dataset, chunks={}
     )
     self.assertIdenticalChunks(actual, expected)
 
@@ -387,7 +387,7 @@ class DatasetToChunksTest(test_util.TestCase):
     datasets = [xarray.Dataset() for _ in range(5)]
     expected = [(xbeam.Key({}), datasets)]
     actual = test_util.EagerPipeline() | xbeam.DatasetToChunks(
-        datasets, chunks={'x': -1}
+        datasets, chunks={}
     )
     self.assertIdenticalChunks(actual, expected)
 
@@ -441,6 +441,14 @@ class DatasetToChunksTest(test_util.TestCase):
         ValueError, 'dataset must be chunked or chunks must be provided'
     ):
       test_util.EagerPipeline() | xbeam.DatasetToChunks(dataset, chunks=None)
+
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        "chunks key 'invalid' is not a dimension on the provided dataset(s)",
+    ):
+      test_util.EagerPipeline() | xbeam.DatasetToChunks(
+          dataset, chunks={'invalid': 1}
+      )
 
     with self.assertRaisesWithLiteralMatch(
         TypeError,

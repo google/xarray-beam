@@ -276,8 +276,8 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     """Initialize DatasetToChunks.
 
     Args:
-      dataset: dataset or datasets to split into (Key, xarray.Dataset) or
-        (Key, [xarray.Dataset, ...]) pairs.
+      dataset: dataset or datasets to split into (Key, xarray.Dataset) or (Key,
+        [xarray.Dataset, ...]) pairs.
       chunks: optional chunking scheme. Required if the dataset is *not* already
         chunked. If the dataset *is* already chunked with Dask, `chunks` takes
         precedence over the existing chunks.
@@ -299,8 +299,13 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     self._validate(dataset, split_vars)
     if chunks is None:
       chunks = self._first.chunks
-    if not chunks:
-      raise ValueError("dataset must be chunked or chunks must be provided")
+      if not chunks:
+        raise ValueError("dataset must be chunked or chunks must be provided")
+    for dim in chunks:
+      if not any(dim in ds.dims for ds in self._datasets):
+        raise ValueError(
+            f"chunks key {dim!r} is not a dimension on the provided dataset(s)"
+        )
     expanded_chunks = normalize_expanded_chunks(chunks, self._first.sizes)
     self.expanded_chunks = expanded_chunks
     self.split_vars = split_vars
