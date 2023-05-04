@@ -11,13 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for era5_rechunk."""
+"""Tests for xbeam_rechunk."""
 
 from absl.testing import absltest
 from absl.testing import flagsaver
 import xarray
 
-from . import era5_rechunk
+from . import xbeam_rechunk
 from xarray_beam._src import test_util
 
 
@@ -33,8 +33,9 @@ class Era5RechunkTest(test_util.TestCase):
     with flagsaver.flagsaver(
         input_path=input_path,
         output_path=output_path,
+        target_chunks='latitude=5,longitude=5,time=-1',
     ):
-      era5_rechunk.main([])
+      xbeam_rechunk.main([])
 
     output_ds = xarray.open_zarr(output_path)
     self.assertEqual(
