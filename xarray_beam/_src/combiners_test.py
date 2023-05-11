@@ -58,6 +58,11 @@ class MeanTest(test_util.TestCase):
       (actual,) = inputs_x | xbeam.Mean.Globally(skipna=False)
       xarray.testing.assert_allclose(expected, actual)
 
+    with self.subTest('with-fanout'):
+      expected = dataset.mean('y', skipna=True)
+      (actual,) = inputs_y | xbeam.Mean.Globally(fanout=2)
+      xarray.testing.assert_allclose(expected, actual)
+
   def test_dim_globally(self):
     inputs = [
         xarray.Dataset({'x': ('time', [1, 2])}),
@@ -92,6 +97,18 @@ class MeanTest(test_util.TestCase):
     actual = inputs | xbeam.Mean('x')
     self.assertAllCloseChunks(actual, expected)
     actual = inputs | xbeam.Mean(['x'])
+    self.assertAllCloseChunks(actual, expected)
+
+  def test_mean_many(self):
+    inputs = []
+    for i in range(0, 100, 10):
+      inputs.append(
+          (xbeam.Key({'x': i}), xarray.Dataset({'y': ('x', i + np.arange(10))}))
+      )
+    expected = [
+        (xbeam.Key({}), xarray.Dataset({'y': 49.5})),
+    ]
+    actual = inputs | xbeam.Mean('x', fanout=2)
     self.assertAllCloseChunks(actual, expected)
 
   def test_mean_2d(self):

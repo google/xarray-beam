@@ -14,7 +14,6 @@
 """Combiners for xarray-beam."""
 from __future__ import annotations
 import dataclasses
-import functools
 from typing import Optional, Sequence, Union
 
 import apache_beam as beam
@@ -82,6 +81,7 @@ class Mean(beam.PTransform):
   dim: Union[str, Sequence[str]]
   skipna: bool = True
   dtype: Optional[npt.DTypeLike] = None
+  fanout: Optional[int] = None
 
   def _update_key(
       self, key: core.Key, chunk: xarray.Dataset
@@ -94,7 +94,7 @@ class Mean(beam.PTransform):
     return (
         pcoll
         | beam.MapTuple(self._update_key)
-        | Mean.PerKey(self.dim, self.skipna, self.dtype)
+        | Mean.PerKey(self.dim, self.skipna, self.dtype, self.fanout)
     )
 
   @dataclasses.dataclass
@@ -104,10 +104,11 @@ class Mean(beam.PTransform):
     dim: DimLike = None
     skipna: bool = True
     dtype: Optional[npt.DTypeLike] = None
+    fanout: Optional[int] = None
 
     def expand(self, pcoll):
       combine_fn = MeanCombineFn(self.dim, self.skipna, self.dtype)
-      return pcoll | beam.CombineGlobally(combine_fn)
+      return pcoll | beam.CombineGlobally(combine_fn).with_fanout(self.fanout)
 
   @dataclasses.dataclass
   class PerKey(beam.PTransform):
@@ -116,7 +117,10 @@ class Mean(beam.PTransform):
     dim: DimLike = None
     skipna: bool = True
     dtype: Optional[npt.DTypeLike] = None
+    fanout: Optional[int] = None
 
     def expand(self, pcoll):
       combine_fn = MeanCombineFn(self.dim, self.skipna, self.dtype)
-      return pcoll | beam.CombinePerKey(combine_fn)
+      return pcoll | beam.CombinePerKey(combine_fn).with_hot_key_fanout(
+          self.fanout
+      )
