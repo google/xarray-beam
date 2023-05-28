@@ -130,9 +130,11 @@ def make_template(
 
   # override the lazy variables
   delayed = dask.delayed(_raise_template_error)()
-  name = 'make_template'
   for k, v in dataset.variables.items():
     if k in lazy_vars:
+      # names of dask arrays are used for keeping track of results, so arrays
+      # with the same name cannot have different shape or dtype
+      name = f"make_template_{'x'.join(map(str, v.shape))}_{v.dtype}"
       result[k].data = dask.array.from_delayed(
           delayed, v.shape, v.dtype, name=name
       )

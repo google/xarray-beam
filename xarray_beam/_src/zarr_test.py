@@ -337,6 +337,20 @@ class DatasetToZarrTest(test_util.TestCase):
     ):
       xbeam._src.zarr._infer_zarr_chunks(dataset.chunk({'x': (3, 2, 1)}))
 
+  def test_chunks_to_zarr_docs_demo(self):
+    # verify that the ChunksToChunk demo from our docs works
+    data = np.random.RandomState(0).randn(2920, 25, 53)
+    ds = xarray.Dataset({'temperature': (('time', 'lat', 'lon'), data)})
+    chunks = {'time': 1000, 'lat': 25, 'lon': 53}
+    temp_dir = self.create_tempdir().full_path
+    (
+        test_util.EagerPipeline()
+        | xbeam.DatasetToChunks(ds, chunks)
+        | xbeam.ChunksToZarr(temp_dir)
+    )
+    result = xarray.open_zarr(temp_dir)
+    xarray.testing.assert_identical(result, ds)
+
 
 if __name__ == '__main__':
   absltest.main()
