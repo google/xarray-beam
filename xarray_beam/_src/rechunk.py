@@ -460,7 +460,10 @@ def split_variables(
   # TODO(shoyer): add support for partial splitting, into explicitly provided
   # sets of variables
   for var_name in dataset:
-    yield key.replace(vars={var_name}), dataset[[var_name]]
+    new_dataset = dataset[[var_name]]
+    offsets = {k: v for k, v in key.offsets.items() if k in new_dataset.dims}
+    new_key = core.Key(offsets, vars={var_name})
+    yield new_key, new_dataset
 
 
 @dataclasses.dataclass

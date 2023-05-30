@@ -257,6 +257,33 @@ class RechunkTest(test_util.TestCase):
       actual = consolidated | xbeam.SplitVariables()
       self.assertIdenticalChunks(actual, split)
 
+  def test_split_variables_with_different_dims(self):
+    inputs = [
+        (
+            xbeam.Key({'x': 0, 'y': 0}, vars=None),
+            xarray.Dataset({
+                'foo': ('x', np.array([1, 2])),
+                'bar': (('x', 'y'), np.array([[1, 2, 3], [4, 5, 6]])),
+            }),
+        ),
+    ]
+    expected = [
+        (
+            xbeam.Key({'x': 0}, vars={'foo'}),
+            xarray.Dataset({
+                'foo': ('x', np.array([1, 2])),
+            }),
+        ),
+        (
+            xbeam.Key({'x': 0, 'y': 0}, vars={'bar'}),
+            xarray.Dataset({
+                'bar': (('x', 'y'), np.array([[1, 2, 3], [4, 5, 6]])),
+            }),
+        ),
+    ]
+    actual = inputs | xbeam.SplitVariables()
+    self.assertIdenticalChunks(actual, expected)
+
   def test_consolidate_chunks_not_fully_shared_dims(self):
     inputs = [
         (
