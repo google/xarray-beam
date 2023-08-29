@@ -42,6 +42,7 @@ jobs:
       run: |
         pip install -e .[tests]
     - name: Run unit tests
+      # TODO(shoyer): remove the pangeo-forge module? the tests no longer pass
       run: |
         pytest xarray_beam
     - name: Run example tests

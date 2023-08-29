@@ -25,6 +25,9 @@ from xarray_beam._src.core import (
     offsets_to_slices,
     validate_chunk
 )
+from xarray_beam._src.dataset import (
+    Dataset,
+)
 from xarray_beam._src.rechunk import (
     ConsolidateChunks,
     ConsolidateVariables,
