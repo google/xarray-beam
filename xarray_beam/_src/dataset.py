@@ -107,7 +107,7 @@ class Dataset:
   @property
   def sizes(self) -> dict[str, int]:
     """Size of each dimension on this dataset."""
-    return dict(self.template.sizes)
+    return dict(self.template.sizes)  # pytype: disable=bad-return-type
 
   def pipe(self, func, *args, **kwargs):
     return func(*args, **kwargs)

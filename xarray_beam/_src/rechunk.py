@@ -295,7 +295,7 @@ def consolidate_fully(
         f'merging dataset chunks with variables {combined_vars} failed.\n'
         + repr_string
     ) from original_error
-  return core.Key(combined_offsets, combined_vars), dataset
+  return core.Key(combined_offsets, combined_vars), dataset  # pytype: disable=wrong-arg-types
 
 
 class _ConsolidateBase(beam.PTransform):
@@ -462,7 +462,7 @@ def split_variables(
   for var_name in dataset:
     new_dataset = dataset[[var_name]]
     offsets = {k: v for k, v in key.offsets.items() if k in new_dataset.dims}
-    new_key = core.Key(offsets, vars={var_name})
+    new_key = core.Key(offsets, vars={var_name})  # pytype: disable=wrong-arg-types
     yield new_key, new_dataset
 
 

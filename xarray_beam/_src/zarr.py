@@ -143,11 +143,11 @@ def make_template(
 
 
 def _unchunked_vars(ds: xarray.Dataset) -> Set[str]:
-  return {k for k, v in ds.variables.items() if v.chunks is None}
+  return {k for k, v in ds.variables.items() if v.chunks is None}  # pytype: disable=bad-return-type
 
 
 def _chunked_vars(ds: xarray.Dataset) -> Set[str]:
-  return set(ds.variables.keys()) - _unchunked_vars(ds)
+  return set(ds.variables.keys()) - _unchunked_vars(ds)  # pytype: disable=bad-return-type
 
 
 def _make_template_from_chunked(dataset: xarray.Dataset) -> xarray.Dataset:
@@ -234,8 +234,8 @@ def _dask_to_zarr_chunksize(dim: str, sizes: Tuple[int, ...]) -> int:
 
 
 def _infer_zarr_chunks(dataset: xarray.Dataset) -> Dict[str, int]:
-  return {
-      dim: _dask_to_zarr_chunksize(dim, sizes)
+  return {  # pytype: disable=bad-return-type
+      dim: _dask_to_zarr_chunksize(dim, sizes)  # pytype: disable=wrong-arg-types
       for dim, sizes in dataset.chunks.items()
   }
 

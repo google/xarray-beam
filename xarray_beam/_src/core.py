@@ -329,7 +329,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
   def _datasets(self) -> List[xarray.Dataset]:
     if isinstance(self.dataset, xarray.Dataset):
       return [self.dataset]
-    return list(self.dataset)
+    return list(self.dataset)  # pytype: disable=bad-return-type
 
   def _validate(self, dataset, split_vars):
     """Raise errors if input parameters are invalid."""
