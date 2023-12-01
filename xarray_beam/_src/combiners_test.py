@@ -14,6 +14,7 @@
 """Tests for xarray_beam._src.combiners."""
 
 from absl.testing import absltest
+from absl.testing import parameterized
 import numpy as np
 import xarray
 import xarray_beam as xbeam
@@ -109,6 +110,39 @@ class MeanTest(test_util.TestCase):
         (xbeam.Key({}), xarray.Dataset({'y': 49.5})),
     ]
     actual = inputs | xbeam.Mean('x', fanout=2)
+    self.assertAllCloseChunks(actual, expected)
+
+  def test_mean_nans(self):
+    nan = np.nan
+    data_with_nans = np.array(
+        [[1, 2, 3], [4, 5, nan], [6, nan, nan], [nan, nan, nan]]
+    )
+    dataset = xarray.Dataset({'foo': (('x', 'y'), data_with_nans)})
+    eager = test_util.EagerPipeline()
+    chunks = eager | xbeam.DatasetToChunks(dataset, {'x': 1, 'y': 1})
+
+    expected = eager | xbeam.DatasetToChunks(
+        dataset.mean('y', skipna=False), {'x': 1}
+    )
+    actual = chunks | xbeam.Mean('y', skipna=False)
+    self.assertAllCloseChunks(actual, expected)
+
+    expected = eager | xbeam.DatasetToChunks(
+        dataset.mean('y', skipna=True), {'x': 1}
+    )
+    actual = chunks | xbeam.Mean('y', skipna=True)
+    self.assertAllCloseChunks(actual, expected)
+
+    expected = eager | xbeam.DatasetToChunks(
+        dataset.mean('x', skipna=True), {'y': 1}
+    )
+    actual = chunks | xbeam.Mean('x', skipna=True)
+    self.assertAllCloseChunks(actual, expected)
+
+    expected = eager | xbeam.DatasetToChunks(
+        dataset.mean('x', skipna=False), {'y': 1}
+    )
+    actual = chunks | xbeam.Mean('x', skipna=False)
     self.assertAllCloseChunks(actual, expected)
 
   def test_mean_2d(self):

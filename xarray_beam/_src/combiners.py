@@ -54,7 +54,9 @@ class MeanCombineFn(beam.transforms.CombineFn):
       count_increment = xarray.ones_like(element)
 
     if self.dim is not None:
-      sum_increment = sum_increment.sum(self.dim)
+      # unconditionally set skipna=False because we already explictly fill in
+      # missing values explicitly above
+      sum_increment = sum_increment.sum(self.dim, skipna=False)
       count_increment = count_increment.sum(self.dim)
 
     new_sum = sum_ + sum_increment
