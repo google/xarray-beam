@@ -306,7 +306,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         raise ValueError(
             f"chunks key {dim!r} is not a dimension on the provided dataset(s)"
         )
-    expanded_chunks = normalize_expanded_chunks(chunks, self._first.sizes)
+    expanded_chunks = normalize_expanded_chunks(chunks, self._first.sizes)  # pytype: disable=wrong-arg-types  # always-use-property-annotation
     self.expanded_chunks = expanded_chunks
     self.split_vars = split_vars
     self.num_threads = num_threads
@@ -395,7 +395,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         relevant_offsets = {
             k: v for k, v in self.offsets.items() if k in variable.dims
         }
-        yield from iter_chunk_keys(relevant_offsets, vars={name})
+        yield from iter_chunk_keys(relevant_offsets, vars={name})  # pytype: disable=wrong-arg-types  # always-use-property-annotation
 
   def _iter_shard_keys(
       self, shard_id: Optional[int], var_name: Optional[str]
@@ -429,7 +429,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         inputs.extend([(i, name) for i in range(self.shard_count)])
       else:
         inputs.append((None, name))
-    return inputs
+    return inputs  # pytype: disable=bad-return-type  # always-use-property-annotation
 
   def _key_to_chunks(self, key: Key) -> Iterator[Tuple[Key, DatasetOrDatasets]]:
     """Convert a Key into an in-memory (Key, xarray.Dataset) pair."""
