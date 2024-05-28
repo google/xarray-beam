@@ -163,6 +163,13 @@ class DatasetToZarrTest(test_util.TestCase):
     ):
       inputs2 | xbeam.ChunksToZarr(temp_dir, template)
 
+    temp_dir = self.create_tempdir().full_path
+    with self.assertRaisesRegex(
+        ValueError,
+        'template dimensions do not match keys in zarr_chunks',
+    ):
+      xbeam.ChunksToZarr(temp_dir, chunked, zarr_chunks={})
+
   def test_multiple_vars_chunks_to_zarr(self):
     dataset = xarray.Dataset(
         {

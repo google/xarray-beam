@@ -243,6 +243,11 @@ def _infer_zarr_chunks(dataset: xarray.Dataset) -> Dict[str, int]:
 def _setup_zarr(template, store, zarr_chunks):
   """Setup a Zarr store."""
   if zarr_chunks is not None:
+    if zarr_chunks.keys() != template.dims.keys():
+      raise ValueError(
+          'template dimensions do not match keys in zarr_chunks: '
+          f'{template.dims.keys()} vs. {zarr_chunks.keys()}'
+      )
     template = _override_chunks(template, zarr_chunks)
   _verify_template_is_lazy(template)
   # inconsistent chunks in encoding can lead to spurious failures in xarray:
