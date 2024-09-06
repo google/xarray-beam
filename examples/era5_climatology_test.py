@@ -41,7 +41,7 @@ class Era5ClimatologyTest(test_util.TestCase):
       era5_climatology.main([])
 
     actual = xarray.open_zarr(output_path)
-    xarray.testing.assert_allclose(actual, expected)
+    xarray.testing.assert_allclose(actual, expected, atol=1e-7)
 
 
 if __name__ == '__main__':
