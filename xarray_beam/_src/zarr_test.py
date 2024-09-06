@@ -11,12 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for xarray_beam._src.core."""
 import re
 
 from absl.testing import absltest
 from absl.testing import parameterized
-from concurrent import futures
 import dask.array as da
 import numpy as np
 import xarray
@@ -124,11 +122,10 @@ class DatasetToZarrTest(test_util.TestCase):
       inputs | xbeam.ChunksToZarr(temp_dir, chunked)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
-    with self.subTest('with template and setup_executor'):
+    with self.subTest('with template and needs_setup=False'):
       temp_dir = self.create_tempdir().full_path
-      with futures.ThreadPoolExecutor() as executor:
-        to_zarr = xbeam.ChunksToZarr(temp_dir, chunked, setup_executor=executor)
-      inputs | to_zarr
+      xbeam.setup_zarr(chunked, temp_dir)
+      inputs | xbeam.ChunksToZarr(temp_dir, chunked, needs_setup=False)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
     with self.subTest('with zarr_chunks and with template'):
