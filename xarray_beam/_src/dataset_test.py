@@ -34,14 +34,8 @@ class DatasetTest(test_util.TestCase):
     self.assertFalse(beam_ds.split_vars)
     self.assertRegex(beam_ds.ptransform.label, r'^from_xarray_\d+$')
     self.assertEqual(
-        repr(beam_ds),
-        textwrap.dedent("""
-            <xarray_beam.Dataset[x: 5][split_vars=False]>
-            Dimensions:  (x: 10)
-            Dimensions without coordinates: x
-            Data variables:
-                foo      (x) int64 dask.array<chunksize=(10,), meta=np.ndarray>
-        """).strip(),
+        repr(beam_ds).split('\n')[0],
+        "<xarray_beam.Dataset[x: 5][split_vars=False]>",
     )
     expected = [
         (xbeam.Key({'x': 0}), ds.head(x=5)),

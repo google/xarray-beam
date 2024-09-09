@@ -115,7 +115,8 @@ class Dataset:
   def __repr__(self):
     base = repr(self.template)
     chunks_str = ', '.join(f'{k}: {v}' for k, v in self.chunks.items())
-    return base.replace(
-        '<xarray.Dataset>',
-        f'<xarray_beam.Dataset[{chunks_str}][split_vars={self.split_vars}]>',
+    return (
+        f'<xarray_beam.Dataset[{chunks_str}][split_vars={self.split_vars}]>'
+        + '\n'
+        + '\n'.join(base.split('\n')[1:])
     )

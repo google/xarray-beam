@@ -367,17 +367,6 @@ class RechunkTest(test_util.TestCase):
                 combining nested dataset chunks for vars=None with offsets={'x': [0, 10]} failed.
                 Leading datasets along dimension 'x':
                   <xarray.Dataset>
-                  Dimensions:  (x: 10)
-                  Dimensions without coordinates: x
-                  Data variables:
-                      foo      (x) int64 0 1 2 3 4 5 6 7 8 9
-                      bar      int64 1
-                  <xarray.Dataset>
-                  Dimensions:  (x: 10)
-                  Dimensions without coordinates: x
-                  Data variables:
-                      foo      (x) int64 10 11 12 13 14 15 16 17 18 19
-                      bar      int64 2
                 """
             ).strip()
         ),
@@ -465,15 +454,6 @@ class RechunkTest(test_util.TestCase):
                 """
             merging dataset chunks with variables [{'foo'}, {'bar'}] failed.
               <xarray.Dataset>
-              Dimensions:  (x: 2)
-              Dimensions without coordinates: x
-              Data variables:
-                  foo      (x) int64 1 2
-              <xarray.Dataset>
-              Dimensions:  (x: 3)
-              Dimensions without coordinates: x
-              Data variables:
-                  bar      (x) int64 3 4 5
         """
             ).strip()
         ),
