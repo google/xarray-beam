@@ -16,6 +16,7 @@ import re
 
 from absl.testing import absltest
 from absl.testing import parameterized
+from concurrent import futures
 import dask.array as da
 import numpy as np
 import xarray
@@ -121,6 +122,13 @@ class DatasetToZarrTest(test_util.TestCase):
     with self.subTest('with template'):
       temp_dir = self.create_tempdir().full_path
       inputs | xbeam.ChunksToZarr(temp_dir, chunked)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      xarray.testing.assert_identical(dataset, result)
+    with self.subTest('with template and setup_executor'):
+      temp_dir = self.create_tempdir().full_path
+      with futures.ThreadPoolExecutor() as executor:
+        to_zarr = xbeam.ChunksToZarr(temp_dir, chunked, setup_executor=executor)
+      inputs | to_zarr
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
     with self.subTest('with zarr_chunks and with template'):

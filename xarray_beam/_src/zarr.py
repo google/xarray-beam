@@ -14,6 +14,7 @@
 """IO with Zarr via Xarray."""
 from __future__ import annotations
 import collections
+import concurrent.futures
 import dataclasses
 import logging
 from typing import (
@@ -329,6 +330,7 @@ class ChunksToZarr(beam.PTransform):
       template: Union[xarray.Dataset, beam.pvalue.AsSingleton, None] = None,
       zarr_chunks: Optional[Mapping[str, int]] = None,
       num_threads: Optional[int] = None,
+      setup_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None,
   ):
     # pyformat: disable
     """Initialize ChunksToZarr.
@@ -359,10 +361,17 @@ class ChunksToZarr(beam.PTransform):
         and makes it harder for Beam runners to shard work. Note that each
         variable in a Dataset is already written in parallel, so this is most
         useful for Datasets with a small number of variables.
+      setup_executor: an optional thread pool executor to use for setting up
+        the Zarr store when creating ChunksToZarr() objects in a non-blocking
+        fashion. Only used if template is provided as an xarray.Dataset. If not
+        provided, setup is performed eagerly.
     """
     # pyformat: enable
     if isinstance(template, xarray.Dataset):
-      _setup_zarr(template, store, zarr_chunks)
+      if setup_executor is not None:
+        setup_executor.submit(_setup_zarr, template, store, zarr_chunks)
+      else:
+        _setup_zarr(template, store, zarr_chunks)
       if zarr_chunks is None:
         zarr_chunks = _infer_zarr_chunks(template)
       template = _make_template_from_chunked(template)
