@@ -44,6 +44,9 @@ from xarray_beam._src.rechunk import (
 from xarray_beam._src.zarr import (
     open_zarr,
     make_template,
+    setup_zarr,
+    validate_zarr_chunk,
+    write_chunk_to_zarr,
     ChunksToZarr,
     DatasetToZarr,
 )
