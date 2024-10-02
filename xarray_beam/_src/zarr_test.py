@@ -257,7 +257,7 @@ class DatasetToZarrTest(test_util.TestCase):
         coords={'x': np.arange(3), 'y': np.arange(2)},
     )
     # Should not raise an exception:
-    xbeam._src.zarr._validate_zarr_chunk(
+    xbeam._src.zarr.validate_zarr_chunk(
         key=xbeam.Key({'x': 0}),
         chunk=dataset,
         template=dataset.chunk(),
