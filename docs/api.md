@@ -24,6 +24,9 @@
     ChunksToZarr
     DatasetToZarr
     make_template
+    setup_zarr
+    validate_zarr_chunk
+    write_chunk_to_zarr
 ```
 
 ## Aggregation
