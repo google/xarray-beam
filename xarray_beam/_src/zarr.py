@@ -310,7 +310,7 @@ def validate_zarr_chunk(
       if not expected_index.equals(actual_index):
         raise ValueError(
             f'template and chunk indexes do not match for dim {dim!r}:\n'
-            f'{expected_index}\nvs.\n{actual_index}'
+            f'{expected_index}\nvs.\n{actual_index}\n{key=}.'
         )
 
   if zarr_chunks is None:
