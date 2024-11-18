@@ -547,6 +547,12 @@ class Rechunk(beam.PTransform):
     self.dim_sizes = dim_sizes
     self.source_chunks = normalize_chunks(source_chunks, dim_sizes)
     self.target_chunks = normalize_chunks(target_chunks, dim_sizes)
+
+    if self.source_chunks == self.target_chunks:
+      self.stage_in = self.stage_out = []
+      logging.info(f'Rechunk with chunks {self.source_chunks} is a no-op')
+      return
+
     plan = rechunking_plan(
         dim_sizes,
         self.source_chunks,

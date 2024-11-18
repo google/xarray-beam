@@ -63,7 +63,7 @@ class RechunkTest(test_util.TestCase):
 
   def test_rechunking_plan(self):
     # this trivial case fits entirely into memory
-    plan, = rechunk.rechunking_plan(
+    (plan,) = rechunk.rechunking_plan(
         dim_sizes={'x': 10, 'y': 20},
         source_chunks={'x': 1, 'y': 20},
         target_chunks={'x': 10, 'y': 1},
@@ -75,7 +75,7 @@ class RechunkTest(test_util.TestCase):
     self.assertEqual(plan, expected)
 
     # this harder case doesn't
-    (read_chunks, _, write_chunks), = rechunk.rechunking_plan(
+    ((read_chunks, _, write_chunks),) = rechunk.rechunking_plan(
         dim_sizes={'t': 1000, 'x': 200, 'y': 300},
         source_chunks={'t': 1, 'x': 200, 'y': 300},
         target_chunks={'t': 1000, 'x': 20, 'y': 20},
@@ -361,15 +361,11 @@ class RechunkTest(test_util.TestCase):
     ]
     with self.assertRaisesRegex(
         ValueError,
-        re.escape(
-            textwrap.dedent(
-                """
+        re.escape(textwrap.dedent("""
                 combining nested dataset chunks for vars=None with offsets={'x': [0, 10]} failed.
                 Leading datasets along dimension 'x':
                   <xarray.Dataset>
-                """
-            ).strip()
-        ),
+                """).strip()),
     ):
       inconsistent_inputs | xbeam.ConsolidateChunks({'x': -1})
 
@@ -449,14 +445,10 @@ class RechunkTest(test_util.TestCase):
     ]
     with self.assertRaisesRegex(
         ValueError,
-        re.escape(
-            textwrap.dedent(
-                """
+        re.escape(textwrap.dedent("""
             merging dataset chunks with variables [{'foo'}, {'bar'}] failed.
               <xarray.Dataset>
-        """
-            ).strip()
-        ),
+        """).strip()),
     ):
       inputs | xbeam.ConsolidateVariables()
 
@@ -815,6 +807,23 @@ class RechunkTest(test_util.TestCase):
         itemsize=8,
     )
     self.assertIdenticalChunks(actual, expected)
+
+  def test_rechunk_same_source_and_target_chunks(self):
+    rs = np.random.RandomState(0)
+    ds = xarray.Dataset({'foo': (('x', 'y'), rs.rand(2, 3))})
+    p = test_util.EagerPipeline()
+    inputs = p | xbeam.DatasetToChunks(ds, {'x': 1}, split_vars=True)
+    rechunk_transform = xbeam.Rechunk(
+        dim_sizes=ds.sizes,
+        source_chunks={'x': 1},
+        target_chunks={'x': 1},
+        itemsize=8,
+    )
+    # no rechunk stages
+    self.assertEqual(rechunk_transform.stage_in, [])
+    self.assertEqual(rechunk_transform.stage_out, [])
+    outputs = inputs | rechunk_transform
+    self.assertIdenticalChunks(outputs, inputs)
 
 
 if __name__ == '__main__':
