@@ -41,7 +41,7 @@ tests_requires = [
 
 setuptools.setup(
     name='xarray-beam',
-    version='0.6.4',  # keep in sync with __init__.py
+    version='0.7.0',  # keep in sync with __init__.py
     license='Apache 2.0',
     author='Google LLC',
     author_email='noreply@google.com',

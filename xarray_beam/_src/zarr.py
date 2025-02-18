@@ -28,6 +28,7 @@ from typing import (
     Tuple,
     Union,
 )
+import warnings
 
 import apache_beam as beam
 import dask
@@ -393,18 +394,20 @@ class ChunksToZarr(beam.PTransform):
         matches the structure of the virtual combined dataset corresponding to
         the chunks fed into this PTransform. One or more variables are expected
         to be "chunked" with Dask, and will only have their metadata written to
-        Zarr without array values. Three types of inputs are supported:
+        Zarr without array values. Two types of inputs are supported:
 
         1. If `template` is an xarray.Dataset, the Zarr store is setup eagerly.
         2. If `template` is a beam.pvalue.AsSingleton object representing the
            result of a prior step in a Beam pipeline, the Zarr store is setup as
            part of the pipeline.
-        3. Finally, if `template` is None, then the structure of the desired
-           Zarr store is discovered automatically by inspecting the inputs into
-           ChunksToZarr. This is an easy option, but can be quite expensive/slow
-           for large datasets -- Beam runners will typically handle this by
-           dumping a temporary copy of the complete dataset to disk. For best
-           performance, supply the template explicitly (1 or 2).
+
+        A `template` of `None` is also supported only for backwards
+        compatibility, in which case Xarray-Beam will attempt to discover the
+        structure of the desired Zarr store automatically by inspecting the
+        inputs into. THIS OPTION IS NOT RECOMMENDED. Due to a race condition
+        (https://github.com/google/xarray-beam/issues/85), it can result in
+        writing corrupted data Zarr stores, particularly when they contain many
+        variables. It can also be quite slow for large datasets.
       zarr_chunks: chunking scheme to use for Zarr. If set, overrides the
         chunking scheme on already chunked arrays in template.
       num_threads: the number of Dataset chunks to write in parallel per worker.
@@ -431,6 +434,14 @@ class ChunksToZarr(beam.PTransform):
     elif template is None:
       if not needs_setup:
         raise ValueError('setup required if template is not supplied')
+      warnings.warn(
+          'No template provided in xarray_beam.ChunksToZarr. This will '
+          'sometimes succeed, but can also result in writing silently '
+          'incomplete data due to a race condition! This option will be '
+          'removed in the future',
+          FutureWarning,
+          stacklevel=2,
+      )
       # Setup happens later, in expand().
     else:
       raise TypeError(

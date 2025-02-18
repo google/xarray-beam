@@ -51,4 +51,4 @@ from xarray_beam._src.zarr import (
     DatasetToZarr,
 )
 
-__version__ = '0.6.4'  # keep in sync with setup.py
+__version__ = '0.7.0'  # keep in sync with setup.py
