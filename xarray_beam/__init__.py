@@ -44,6 +44,7 @@ from xarray_beam._src.rechunk import (
 from xarray_beam._src.zarr import (
     open_zarr,
     make_template,
+    replace_template_dims,
     setup_zarr,
     validate_zarr_chunk,
     write_chunk_to_zarr,
@@ -51,4 +52,4 @@ from xarray_beam._src.zarr import (
     DatasetToZarr,
 )
 
-__version__ = '0.7.0'  # keep in sync with setup.py
+__version__ = '0.8.0'  # keep in sync with setup.py

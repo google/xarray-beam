@@ -17,6 +17,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import dask.array as da
 import numpy as np
+import pandas as pd
 import xarray
 import xarray_beam as xbeam
 from xarray_beam._src import test_util
@@ -102,6 +103,86 @@ class DatasetToZarrTest(test_util.TestCase):
     template = xbeam._src.zarr._make_template_from_chunked(source)
     self.assertEqual(template.foo.chunks, ((3,),))
     self.assertIsNone(template.bar.chunks)
+
+  def test_replace_template_dims_with_coords(self):
+    source = xarray.Dataset(
+        {'foo': (('x', 'y'), np.zeros((1, 2)))},
+        coords={'x': [0], 'y': [10, 20]},
+    )
+    template = xbeam.make_template(source)
+    new_x_coords = pd.date_range('2000-01-01', periods=5)
+    new_template = xbeam.replace_template_dims(template, x=new_x_coords)
+
+    self.assertEqual(new_template.sizes, {'x': 5, 'y': 2})
+    expected_x_coord = xarray.DataArray(
+        new_x_coords, dims='x', coords={'x': new_x_coords}
+    )
+    xarray.testing.assert_equal(new_template.x, expected_x_coord)
+    xarray.testing.assert_equal(new_template.y, source.y)  # Unchanged coord
+    self.assertEqual(new_template.foo.shape, (5, 2))
+    self.assertIsInstance(new_template.foo.data, da.Array)  # Still lazy
+
+  def test_replace_template_dims_with_size(self):
+    source = xarray.Dataset(
+        {'foo': (('x', 'y'), np.zeros((1, 2)))},
+        coords={'x': [0], 'y': [10, 20]},
+    )
+    template = xbeam.make_template(source)
+    new_template = xbeam.replace_template_dims(template, x=10)
+
+    self.assertEqual(new_template.sizes, {'x': 10, 'y': 2})
+    self.assertNotIn(
+        'x', new_template.coords
+    )  # Coord is dropped when replaced by size
+    xarray.testing.assert_equal(new_template.y, source.y)
+    self.assertEqual(new_template.foo.shape, (10, 2))
+    self.assertIsInstance(new_template.foo.data, da.Array)
+
+  def test_replace_template_dims_multiple(self):
+    source = xarray.Dataset(
+        {'foo': (('x', 'y'), np.zeros((1, 2)))},
+        coords={'x': [0], 'y': [10, 20]},
+    )
+    template = xbeam.make_template(source)
+    new_x_coords = pd.date_range('2000-01-01', periods=5)
+    new_template = xbeam.replace_template_dims(template, x=new_x_coords, y=3)
+
+    self.assertEqual(new_template.sizes, {'x': 5, 'y': 3})
+    expected_x_coord = xarray.DataArray(
+        new_x_coords, dims='x', coords={'x': new_x_coords}
+    )
+    xarray.testing.assert_equal(new_template.x, expected_x_coord)
+    self.assertNotIn('y', new_template.coords)
+    self.assertEqual(new_template.foo.shape, (5, 3))
+    self.assertIsInstance(new_template.foo.data, da.Array)
+
+  def test_replace_template_dims_multiple_vars(self):
+    source = xarray.Dataset(
+        {
+            'foo': (('x', 'y'), np.zeros((1, 2))),
+            'bar': ('x', np.zeros(1)),
+            'baz': ('z', np.zeros(3)),  # Unrelated dim
+        },
+        coords={'x': [0], 'y': [10, 20], 'z': [1, 2, 3]},
+    )
+    template = xbeam.make_template(source)
+    new_template = xbeam.replace_template_dims(template, x=5)
+
+    self.assertEqual(new_template.sizes, {'x': 5, 'y': 2, 'z': 3})
+    self.assertNotIn('x', new_template.coords)
+    xarray.testing.assert_equal(new_template.y, source.y)
+    xarray.testing.assert_equal(new_template.z, source.z)
+    self.assertEqual(new_template.foo.shape, (5, 2))
+    self.assertEqual(new_template.bar.shape, (5,))
+    self.assertEqual(new_template.baz.shape, (3,))  # Unchanged var
+    self.assertIsInstance(new_template.foo.data, da.Array)
+    self.assertIsInstance(new_template.bar.data, da.Array)
+    self.assertIsInstance(new_template.baz.data, da.Array)
+
+  def test_replace_template_dims_error_on_non_template(self):
+    source = xarray.Dataset({'foo': ('x', np.zeros(1))})  # Not a template
+    with self.assertRaisesRegex(ValueError, 'is not chunked with Dask'):
+      xbeam.replace_template_dims(source, x=5)
 
   def test_chunks_to_zarr(self):
     dataset = xarray.Dataset(

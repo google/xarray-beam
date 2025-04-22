@@ -33,6 +33,8 @@ import warnings
 import apache_beam as beam
 import dask
 import dask.array
+import numpy as np
+import pandas as pd
 import xarray
 from xarray_beam._src import core
 from xarray_beam._src import rechunk
@@ -141,6 +143,80 @@ def make_template(
       )
 
   return result
+
+
+def replace_template_dims(
+    template: xarray.Dataset,
+    **dim_replacements: int | np.ndarray | pd.Index | xarray.DataArray,
+) -> xarray.Dataset:
+  """Replaces dimension(s) in a template with updates coordinates and/or sizes.
+
+  This is convenient for creating templates from evaluated results for a
+  single chunk.
+
+  Example usage:
+
+    import numpy as np
+    import pandas as pd
+    import xarray
+    import xarray_beam as xbeam
+
+    times = pd.date_range('1940-01-01', '2025-04-21', freq='1h')
+    dataset = xarray.Dataset(
+        {'foo': (('time', 'longitude', 'latitude'), np.zeros((1, 360, 180)))},
+        coords={
+            'time': times[:1],
+            'longitude': np.arange(0.0, 360.0),
+            'latitude': 0.5 + np.arange(-90, 90),
+        },
+    )
+    template = xbeam.make_template(dataset)
+    print(template)
+    # <xarray.Dataset> Size: 8MB
+    # Dimensions:    (time: 1, longitude: 1440, latitude: 721)
+    # Coordinates:
+    #   * time       (time) datetime64[ns] 8B 1940-01-01
+    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5 359.8
+    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75 90.0
+    # Data variables:
+    #     foo        (time, longitude, latitude) float64 8MB dask.array<chunksize=(1, 1440, 721), meta=np.ndarray>
+
+    template = xbeam.replace_template_dims(template, time=times)
+    print(template)
+    # <xarray.Dataset> Size: 6TB
+    # Dimensions:    (time: 747769, longitude: 1440, latitude: 721)
+    # Coordinates:
+    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5 359.8
+    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75 90.0
+    #   * time       (time) datetime64[ns] 6MB 1940-01-01 ... 2025-04-21
+    # Data variables:
+    #     foo        (time, longitude, latitude) float64 6TB dask.array<chunksize=(747769, 1440, 721), meta=np.ndarray>
+
+  Args:
+    template: The template to replace dimensions in.
+    **dim_replacements: A mapping from dimension name to the new dimension
+      values. Values may be given as either integers (indicating new sizes) or
+      arrays (indicating new coordinate values).
+
+  Returns:
+    Template with the replaced dimensions.
+  """
+  expansions = {}
+  for name, variable in template.items():
+    if variable.chunks is None:
+      raise ValueError(
+          f'Data variable {name} is not chunked with Dask. Please call'
+          ' xarray_beam.make_template() to create a valid template before '
+          f' calling replace_template_dims(): {template}'
+      )
+    expansions[name] = {
+        dim: replacement for dim, replacement in dim_replacements.items()
+        if dim in variable.dims
+    }
+  template = template.isel({dim: 0 for dim in dim_replacements}, drop=True)
+  for name, variable in template.items():
+    template[name] = variable.expand_dims(expansions[name])
+  return template
 
 
 def _unchunked_vars(ds: xarray.Dataset) -> Set[str]:

@@ -47,9 +47,7 @@ def main(argv):
   source_dataset, source_chunks = xbeam.open_zarr(INPUT_PATH.value)
 
   # This lazy "template" allows us to setup the Zarr outputs before running the
-  # pipeline. We don't really need to supply a template here because the outputs
-  # are small (the template argument in ChunksToZarr is optional), but it makes
-  # the pipeline slightly more efficient.
+  # pipeline.
   max_month = source_dataset.time.dt.month.max().item()  # normally 12
   template = (
       xbeam.make_template(source_dataset)
