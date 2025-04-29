@@ -314,6 +314,20 @@ class DatasetToZarrTest(test_util.TestCase):
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
 
+  def test_chunks_to_zarr_dask_chunks(self):
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(0, 60, 10))},
+        coords={'x': np.arange(6)},
+    )
+    chunked = dataset.chunk()
+    inputs = [
+        (xbeam.Key({'x': 0}), dataset.chunk(3)),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    inputs | xbeam.ChunksToZarr(temp_dir, chunked)
+    result = xarray.open_zarr(temp_dir)
+    xarray.testing.assert_identical(dataset, result)
+
   def test_dataset_to_zarr_simple(self):
     dataset = xarray.Dataset(
         {'foo': ('x', np.arange(0, 60, 10))},

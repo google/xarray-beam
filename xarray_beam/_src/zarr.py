@@ -437,8 +437,10 @@ def write_chunk_to_zarr(
       k for k in chunk.variables if k in _unchunked_vars(template)
   ]
   writable_chunk = chunk.drop_vars(already_written)
+  # Ensure the arrays in writable_chunk are each stored in a single dask chunk.
+  writable_chunk = writable_chunk.compute().chunk()
   try:
-    future = writable_chunk.chunk().to_zarr(
+    future = writable_chunk.to_zarr(
         store, region=region, compute=False, consolidated=True
     )
     future.compute(num_workers=len(writable_chunk))
