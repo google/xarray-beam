@@ -13,6 +13,7 @@
 # limitations under the License.
 """Tests for xarray_beam._src.core."""
 
+import re
 from absl.testing import absltest
 from absl.testing import parameterized
 import apache_beam as beam
@@ -509,48 +510,59 @@ class DatasetToChunksTest(test_util.TestCase):
 
 class ValidateEachChunkTest(test_util.TestCase):
 
+  def test_validate_chunk_raises_on_dask_chunked(self):
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))}).chunk()
+    key = xbeam.Key({'x': 0})
+
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape(
+            "Dataset variable 'foo' corresponding to key Key(offsets={'x': 0},"
+            ' vars=None) is chunked with Dask. Datasets passed to'
+            ' validate_chunk must be fully computed (not chunked):'
+        ),
+    ):
+      core.validate_chunk(key, dataset)
+
   def test_unmatched_dimension_raises_error(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
-    with self.assertRaises(ValueError) as e:
-      ([(xbeam.Key({'x': 0, 'y': 0}), dataset)] | xbeam.ValidateEachChunk())
-    self.assertIn(
-        (
+    key = xbeam.Key({'x': 0, 'y': 0})
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape(
             "Key offset(s) 'y' in Key(offsets={'x': 0, 'y': 0}, vars=None) not "
             'found in Dataset dimensions'
         ),
-        e.exception.args[0],
-    )
+    ):
+      core.validate_chunk(key, dataset)
 
-  def test_unmatched_variables_raises_error(self):
+  def test_unmatched_variables_raises_error_core(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
-    with self.assertRaises(ValueError) as e:
-      ([(xbeam.Key({'x': 0}, {'bar'}), dataset)] | xbeam.ValidateEachChunk())
-    self.assertIn(
-        (
+    key = xbeam.Key({'x': 0}, {'bar'})
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape(
             "Key var(s) 'bar' in Key(offsets={'x': 0}, vars={'bar'}) not found"
             ' in Dataset data variables'
         ),
-        e.exception.args[0],
-    )
+    ):
+      core.validate_chunk(key, dataset)
 
-  def test_unmatched_variables_multiple_datasets_raises_error(self):
+  def test_unmatched_variables_multiple_datasets_raises_error_core(self):
     datasets = [
         xarray.Dataset({'foo': ('x', i + np.arange(6))}) for i in range(11)
     ]
     datasets[5] = datasets[5].rename({'foo': 'bar'})
+    key = xbeam.Key({'x': 0}, vars={'foo'})
 
-    with self.assertRaisesWithLiteralMatch(
+    with self.assertRaisesRegex(
         ValueError,
-        (
+        re.escape(
             "Key var(s) 'foo' in Key(offsets={'x': 0}, vars={'foo'}) "
-            f'not found in Dataset data variables: {datasets[5]} '
-            "[while running 'ValidateEachChunk/MapTuple(_validate)']"
+            f'not found in Dataset data variables: {datasets[5]}'
         ),
-    ) as e:
-      (
-          [(xbeam.Key({'x': 0}, vars={'foo'}), datasets)]
-          | xbeam.ValidateEachChunk()
-      )
+    ):
+      core.validate_chunk(key, datasets)
 
   def test_validate_chunks_compose_in_pipeline(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})

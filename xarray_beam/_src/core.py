@@ -32,7 +32,6 @@ import apache_beam as beam
 import immutabledict
 import numpy as np
 import xarray
-
 from xarray_beam._src import threadmap
 
 _DEFAULT = object()
@@ -473,10 +472,25 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
 
 
 def validate_chunk(key: Key, datasets: DatasetOrDatasets) -> None:
-  """Verify that keys correspond to Dataset properties."""
+  """Verify that a key and dataset(s) are valid for xarray-beam transforms."""
   if isinstance(datasets, xarray.Dataset):
     datasets: list[xarray.Dataset] = [datasets]
+
   for dataset in datasets:
+    # Verify that no variables are chunked with Dask
+    for var_name, variable in dataset.variables.items():
+      if variable.chunks is not None:
+        raise ValueError(
+            f"Dataset variable {var_name!r} corresponding to key {key} is"
+            " chunked with Dask. Datasets passed to validate_chunk must be"
+            f" fully computed (not chunked): {dataset}\nThis typically arises"
+            " with datasets originating with `xarray.open_zarr()`, which by"
+            " default use Dask. If this is the case, you can fix it by passing"
+            " `chunks=None` or xarray_beam.open_zarr(). Alternatively, you"
+            " can load datasets explicitly into memory with `.compute()`."
+        )
+
+    # Validate key offsets
     missing_keys = [
         repr(k) for k in key.offsets.keys() if k not in dataset.dims
     ]
@@ -486,22 +500,20 @@ def validate_chunk(key: Key, datasets: DatasetOrDatasets) -> None:
           f" Dataset dimensions: {dataset!r}"
       )
 
-    if key.vars is None:
-      continue
-
-    missing_vars = [repr(v) for v in key.vars if v not in dataset.data_vars]
-    if missing_vars:
-      raise ValueError(
-          f"Key var(s) {', '.join(missing_vars)} in {key} not found in Dataset"
-          f" data variables: {dataset!r}"
-      )
+    # Validate key vars
+    if key.vars is not None:
+      missing_vars = [repr(v) for v in key.vars if v not in dataset.data_vars]
+      if missing_vars:
+        raise ValueError(
+            f"Key var(s) {', '.join(missing_vars)} in {key} not found in"
+            f" Dataset data variables: {dataset!r}"
+        )
 
 
 class ValidateEachChunk(beam.PTransform):
-  """Check that keys match the dataset for each key, dataset tuple."""
+  """Check that keys and dataset(s) are valid for xarray-beam transforms."""
 
   def _validate(self, key, dataset):
-    # Other checks may come later...
     validate_chunk(key, dataset)
     return key, dataset
 
