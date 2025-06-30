@@ -42,7 +42,7 @@ tests_requires = [
 setuptools.setup(
     name='xarray-beam',
     version='0.8.1',  # keep in sync with __init__.py
-    license='Apache 2.0',
+    license='Apache-2.0',
     author='Google LLC',
     author_email='noreply@google.com',
     install_requires=base_requires,
@@ -50,7 +50,7 @@ setuptools.setup(
         'tests': tests_requires,
         'docs': docs_requires,
     },
-    url='https://github.com/google/xarray-beam',
+    url={'source-code': 'https://github.com/google/xarray-beam'},
     packages=setuptools.find_packages(exclude=['examples']),
     python_requires='>=3',
 )
