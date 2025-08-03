@@ -253,6 +253,51 @@ class DatasetToZarrTest(test_util.TestCase):
     ):
       inputs2 | xbeam.ChunksToZarr(temp_dir, template)
 
+  def test_chunks_to_zarr_append(self):
+    dataset = xarray.Dataset(
+        {'foo': (('t', 'x'), np.arange(3 * 5).reshape(3, 5))},
+        coords={
+            't': np.arange(100, 103),
+            'x': np.arange(5),
+        },
+    )
+    chunked = dataset.chunk(t=1)
+
+    # Write the first two chunks.
+    zarr_chunks = {'t': 1, 'x': 5}
+    two_chunk_template = xbeam.make_template(dataset.isel(t=slice(2)))
+    first_two_chunks = [
+        (xbeam.Key({'t': 0}), dataset.isel(t=[0])),
+        (xbeam.Key({'t': 1}), dataset.isel(t=[1])),
+    ]
+    path = self.create_tempdir().full_path
+    first_two_chunks | xbeam.ChunksToZarr(
+        path, template=two_chunk_template, zarr_chunks=zarr_chunks
+    )
+    two_chunk_result = xarray.open_zarr(path, consolidated=True)
+    xarray.testing.assert_identical(dataset.isel(t=slice(2)), two_chunk_result)
+
+    # Now append the last chunk.
+    # First modify the metadata
+    chunked.isel(t=[2]).to_zarr(path, mode='a', append_dim='t', compute=False)
+
+    # Then get the full template. Opening the dataset is an easy way to get it.
+    xbeam_opened_result, chunks = xbeam.open_zarr(path)
+    full_template = xbeam.make_template(xbeam_opened_result)
+    self.assertEqual(chunks, zarr_chunks)
+
+    last_chunk = [
+        (xbeam.Key({'t': 2}), dataset.isel(t=[2])),
+    ]
+    last_chunk | xbeam.ChunksToZarr(
+        path,
+        template=full_template,
+        zarr_chunks=chunks,
+        needs_setup=False,
+    )
+    full_result = xarray.open_zarr(path, consolidated=True)
+    xarray.testing.assert_identical(dataset, full_result)
+
   def test_multiple_vars_chunks_to_zarr(self):
     dataset = xarray.Dataset(
         {

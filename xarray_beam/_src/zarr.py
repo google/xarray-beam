@@ -461,6 +461,7 @@ class ChunksToZarr(beam.PTransform):
       *,
       num_threads: Optional[int] = None,
       needs_setup: bool = True,
+      append_dim: Optional[str] = None,
   ):
     # pyformat: disable
     """Initialize ChunksToZarr.
@@ -495,6 +496,8 @@ class ChunksToZarr(beam.PTransform):
         useful for Datasets with a small number of variables.
       needs_setup: if False, then the Zarr store is already setup and does not
         need to be set up as part of this PTransform.
+      append_dim: If provided, chunks are appended along `append_dim` to an
+        existing store.
     """
     # pyformat: enable
     if isinstance(template, xarray.Dataset):
