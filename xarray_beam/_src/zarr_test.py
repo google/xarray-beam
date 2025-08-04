@@ -287,14 +287,20 @@ class DatasetToZarrTest(test_util.TestCase):
       # Append the new data (t=[2]) to the existing metadata.
       # This results in t/.zarray that has chunk:2, equal to the number of times
       # in the first write.
-      dataset.isel(t=[2]).chunk(zarr_chunks).to_zarr(
-          path, mode='a', append_dim='t', compute=False
-      )
+      #dataset.isel(t=[2]).chunk(zarr_chunks).to_zarr(
+      #    path, mode='a', append_dim='t', compute=False
+      #)
+      xbeam.setup_zarr(xbeam.make_template(dataset.isel(t=[2])), path, zarr_chunks=zarr_chunks, mode='a', append_dim='t')
     elif mode == 'w':
       # Overwrite all metadata.
       # This results in t/.zarray that has chunk:3, equal to the number of times
       # in the total dataset.
-      dataset.chunk(zarr_chunks).to_zarr(path, mode='w', compute=False)
+      #dataset.chunk(zarr_chunks).to_zarr(path, mode='w', compute=False, consolidated=True)
+      C = dataset.chunk(zarr_chunks)
+      #xbeam.setup_zarr(xbeam.make_template(dataset.chunk(zarr_chunks)), path, zarr_chunks=zarr_chunks, mode='w')
+      #xbeam.setup_zarr(dataset.chunk(zarr_chunks), path, zarr_chunks=zarr_chunks, mode='w')
+      D = xbeam.setup_zarr(xbeam.make_template(dataset), path, zarr_chunks=zarr_chunks, mode='w', debug=True)
+      D.to_zarr(path, mode='w', compute=False)
 
     # Second, get full template. Opening the dataset is an easy way to get it.
     xbeam_opened_result, chunks = xbeam.open_zarr(path)
@@ -314,6 +320,7 @@ class DatasetToZarrTest(test_util.TestCase):
     final_result, final_chunks = xbeam.open_zarr(path, consolidated=True)
     xarray.testing.assert_identical(dataset, final_result)
     self.assertEqual(zarr_chunks, final_chunks)
+    #import pudb; pu.db
 
   def test_multiple_vars_chunks_to_zarr(self):
     dataset = xarray.Dataset(

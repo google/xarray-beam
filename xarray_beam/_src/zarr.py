@@ -321,6 +321,9 @@ def setup_zarr(
     template: xarray.Dataset,
     store: WritableStore,
     zarr_chunks: Optional[Mapping[str, int]] = None,
+    append_dim: Optional[str] = None,
+    mode: str = 'w',
+    debug: bool = False,
 ) -> None:
   """Setup a Zarr store.
 
@@ -345,7 +348,9 @@ def setup_zarr(
     if 'chunks' in var.encoding:
       del var.encoding['chunks']
   logging.info(f'writing Zarr metadata for template:\n{template}')
-  template2.to_zarr(store, compute=False, consolidated=True, mode='w')
+  if debug:
+    return template2
+  template2.to_zarr(store, compute=False, consolidated=True, mode=mode, append_dim=append_dim)
 
 
 def validate_zarr_chunk(
