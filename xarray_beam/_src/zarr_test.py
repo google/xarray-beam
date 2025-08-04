@@ -253,7 +253,11 @@ class DatasetToZarrTest(test_util.TestCase):
     ):
       inputs2 | xbeam.ChunksToZarr(temp_dir, template)
 
-  def test_chunks_to_zarr_append(self):
+  @parameterized.named_parameters(
+      dict(testcase_name='append', mode='a'),
+      dict(testcase_name='overwrite', mode='w'),
+  )
+  def test_chunks_to_zarr_append(self, mode):
     dataset = xarray.Dataset(
         {'foo': (('t', 'x'), np.arange(3 * 5).reshape(3, 5))},
         coords={
@@ -261,7 +265,6 @@ class DatasetToZarrTest(test_util.TestCase):
             'x': np.arange(5),
         },
     )
-    chunked = dataset.chunk(t=1)
 
     # Write the first two chunks.
     zarr_chunks = {'t': 1, 'x': 5}
@@ -278,25 +281,39 @@ class DatasetToZarrTest(test_util.TestCase):
     xarray.testing.assert_identical(dataset.isel(t=slice(2)), two_chunk_result)
 
     # Now append the last chunk.
-    # First modify the metadata
-    chunked.isel(t=[2]).to_zarr(path, mode='a', append_dim='t', compute=False)
 
-    # Then get the full template. Opening the dataset is an easy way to get it.
+    # First modify the metadata
+    if mode == 'a':
+      # Append the new data (t=[2]) to the existing metadata.
+      # This results in t/.zarray that has chunk:2, equal to the number of times
+      # in the first write.
+      dataset.isel(t=[2]).chunk(zarr_chunks).to_zarr(
+          path, mode='a', append_dim='t', compute=False
+      )
+    elif mode == 'w':
+      # Overwrite all metadata.
+      # This results in t/.zarray that has chunk:3, equal to the number of times
+      # in the total dataset.
+      dataset.chunk(zarr_chunks).to_zarr(path, mode='w', compute=False)
+
+    # Second, get full template. Opening the dataset is an easy way to get it.
     xbeam_opened_result, chunks = xbeam.open_zarr(path)
     full_template = xbeam.make_template(xbeam_opened_result)
-    self.assertEqual(chunks, zarr_chunks)
 
+    # Third, write the last chunk only.
     last_chunk = [
         (xbeam.Key({'t': 2}), dataset.isel(t=[2])),
     ]
     last_chunk | xbeam.ChunksToZarr(
         path,
         template=full_template,
-        zarr_chunks=chunks,
+        zarr_chunks=zarr_chunks,
         needs_setup=False,
     )
-    full_result = xarray.open_zarr(path, consolidated=True)
-    xarray.testing.assert_identical(dataset, full_result)
+
+    final_result, final_chunks = xbeam.open_zarr(path, consolidated=True)
+    xarray.testing.assert_identical(dataset, final_result)
+    self.assertEqual(zarr_chunks, final_chunks)
 
   def test_multiple_vars_chunks_to_zarr(self):
     dataset = xarray.Dataset(
