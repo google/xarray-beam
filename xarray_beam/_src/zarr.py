@@ -35,6 +35,7 @@ import dask
 import dask.array
 import numpy as np
 import pandas as pd
+import pudb  # TODO Remove
 import xarray
 from xarray_beam._src import core
 from xarray_beam._src import rechunk
@@ -321,9 +322,6 @@ def setup_zarr(
     template: xarray.Dataset,
     store: WritableStore,
     zarr_chunks: Optional[Mapping[str, int]] = None,
-    append_dim: Optional[str] = None,
-    mode: str = 'w',
-    debug: bool = False,
 ) -> None:
   """Setup a Zarr store.
 
@@ -348,9 +346,7 @@ def setup_zarr(
     if 'chunks' in var.encoding:
       del var.encoding['chunks']
   logging.info(f'writing Zarr metadata for template:\n{template}')
-  if debug:
-    return template2
-  template2.to_zarr(store, compute=False, consolidated=True, mode=mode, append_dim=append_dim)
+  template2.to_zarr(store, compute=False, consolidated=True, mode='w')
 
 
 def validate_zarr_chunk(
@@ -423,6 +419,7 @@ def write_chunk_to_zarr(
     chunk: xarray.Dataset,
     store: WritableStore,
     template: xarray.Dataset,
+    debug,  # TODO Remove
 ) -> None:
   """Write a single Dataset chunk to Zarr.
 
@@ -437,6 +434,8 @@ def write_chunk_to_zarr(
       without array values.
   """
   # Immutable dicts not considered a Mapping type which method expects.
+  if debug:
+    pu.db
   region = core.offsets_to_slices(key.offsets, chunk.sizes)  # pytype: disable=wrong-arg-types
   already_written = [
       k for k in chunk.variables if k in _unchunked_vars(template)
@@ -466,6 +465,7 @@ class ChunksToZarr(beam.PTransform):
       *,
       num_threads: Optional[int] = None,
       needs_setup: bool = True,
+      debug=False,  # TODO Remove
   ):
     # pyformat: disable
     """Initialize ChunksToZarr.
@@ -501,6 +501,9 @@ class ChunksToZarr(beam.PTransform):
       needs_setup: if False, then the Zarr store is already setup and does not
         need to be set up as part of this PTransform.
     """
+    self.debug = debug
+    if self.debug:
+      pu.db
     # pyformat: enable
     if isinstance(template, xarray.Dataset):
       if needs_setup:
@@ -544,9 +547,9 @@ class ChunksToZarr(beam.PTransform):
     validate_zarr_chunk(key, chunk, template, self.zarr_chunks)
     return key, chunk
 
-  def _write_chunk_to_zarr(self, key, chunk, template=None):
+  def _write_chunk_to_zarr(self, key, chunk, template=None, debug=None):
     assert template is not None
-    return write_chunk_to_zarr(key, chunk, self.store, template)
+    return write_chunk_to_zarr(key, chunk, self.store, template, debug)
 
   def expand(self, pcoll):
     if isinstance(self.template, xarray.Dataset):
@@ -574,6 +577,7 @@ class ChunksToZarr(beam.PTransform):
             self._write_chunk_to_zarr,
             template=template,
             num_threads=self.num_threads,
+            debug=self.debug,
         )
     )
 
