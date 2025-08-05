@@ -289,7 +289,12 @@ class DatasetToZarrTest(test_util.TestCase):
     # This results in t/.zarray that has chunk:2, equal to the number of times
     # in the first write.
     xbeam.make_template(ds.isel(t=[2])).chunk(zarr_chunks).to_zarr(
-        path, mode='a', append_dim='t', compute=False
+        # Caling make_template is not necessary, but let's test it since
+        # this is the anticipated workflow.
+        path,
+        mode='a',
+        append_dim='t',
+        compute=False,
     )
     xbeam_opened_result, chunks = xbeam.open_zarr(path)
     self.assertEqual(zarr_chunks, chunks)
