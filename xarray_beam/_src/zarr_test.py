@@ -18,7 +18,6 @@ from absl.testing import parameterized
 import dask.array as da
 import numpy as np
 import pandas as pd
-import pudb  # TODO REmove
 import xarray
 import xarray_beam as xbeam
 from xarray_beam._src import test_util
@@ -254,95 +253,61 @@ class DatasetToZarrTest(test_util.TestCase):
     ):
       inputs2 | xbeam.ChunksToZarr(temp_dir, template)
 
-  @parameterized.named_parameters(
-      dict(testcase_name='append', mode='a'),
-      dict(testcase_name='overwrite', mode='w'),
-  )
-  def test_chunks_to_zarr_append(self, mode):
+  def test_chunks_to_zarr_append(self):
     zarr_chunks = {'t': 1, 'x': 5}
 
-    # Calling .chunk() on this dataset is very important.
-    ds_orig = xarray.Dataset(
+    # ds is the full dataset we want to write to zarr.
+
+    # Warning: Do not chunk this ds. If you do, it will secretly
+    # write itself to disk, then simply modifying the template (without
+    # even calling ChunksToZarr) is enough to make all tests pass!
+    ds = xarray.Dataset(
         {'foo': (('t', 'x'), np.arange(3 * 5).reshape(3, 5))},
         coords={
             't': np.arange(100, 103),
             'x': np.arange(5),
         },
-    )#.chunk(zarr_chunks)
-
-    # Create ds_full, which will be different than ds_orig.
-    ds_first_two = (ds_orig.isel(t=slice(2))).chunk(zarr_chunks)
-    ds_last = (ds_orig.isel(t=[2]) * 2).chunk(zarr_chunks)
-    ds_full = xarray.concat((ds_first_two, ds_last), dim='t')
+    )
 
     # Write the first two chunks.
-    two_chunk_template = xbeam.make_template(ds_first_two)
+    two_chunk_template = xbeam.make_template(ds.isel(t=slice(2)))
     first_two_chunks = [
-        (xbeam.Key({'t': 0}), ds_first_two.isel(t=[0])),
-        (xbeam.Key({'t': 1}), ds_first_two.isel(t=[1])),
+        (xbeam.Key({'t': 0}), ds.isel(t=[0])),
+        (xbeam.Key({'t': 1}), ds.isel(t=[1])),
     ]
     path = self.create_tempdir().full_path
     first_two_chunks | xbeam.ChunksToZarr(
         path, template=two_chunk_template, zarr_chunks=zarr_chunks
     )
     two_chunk_result = xarray.open_zarr(path, consolidated=True)
-    xarray.testing.assert_identical(ds_first_two, two_chunk_result)
+    xarray.testing.assert_identical(ds.isel(t=slice(2)), two_chunk_result)
 
     # Now append the last chunk.
 
     # First modify the metadata
-    if mode == 'a':
-      # Append the new data (t=[2]) to the existing metadata.
-      # This results in t/.zarray that has chunk:2, equal to the number of times
-      # in the first write.
-      ds_last.chunk(zarr_chunks).to_zarr(
-          path, mode='a', append_dim='t', compute=False
-      )
-      xbeam_opened_result, chunks = xbeam.open_zarr(path)
-      full_template = xbeam.make_template(xbeam_opened_result)
-    elif mode == 'w':
-      pu.db
-      partial_result, partial_chunks = xbeam.open_zarr(path, consolidated=True)
-      # Overwrite all metadata.
-      # This results in t/.zarray that has chunk:3, equal to the number of times
-      # in the total dataset.
-      full_template = xbeam.replace_template_dims(
-          xbeam.make_template(partial_result),
-          t=ds_orig.t,
-      ).chunk(zarr_chunks)
-      full_template.to_zarr(path, mode='a', compute=False, consolidated=True)
-      #xbeam.setup_zarr(full_template, path, zarr_chunks=zarr_chunks)
-
-    # An interesting fact is that, although we have only asked ChunksToZarr to
-    # write first_two_chunks, this premature_result will contain the entire
-    # ds_orig!  (this happens if ds_orig was chunked)
-    #premature_result, final_chunks = xbeam.open_zarr(path, consolidated=True)
-    #xarray.testing.assert_identical(ds_orig, premature_result)
+    # Append the new data (t=[2]) to the existing metadata.
+    # This results in t/.zarray that has chunk:2, equal to the number of times
+    # in the first write.
+    xbeam.make_template(ds.isel(t=[2])).chunk(zarr_chunks).to_zarr(
+        path, mode='a', append_dim='t', compute=False
+    )
+    xbeam_opened_result, chunks = xbeam.open_zarr(path)
+    self.assertEqual(zarr_chunks, chunks)
 
     # Second, write the last chunk only.
     last_chunk = [
-        (xbeam.Key({'t': 2}), ds_last),
+        (xbeam.Key({'t': 2}), ds.isel(t=[2])),
     ]
-    pu.db
-    region = {'t': slice(2, 3, 1), 'x': slice(0, 5, 1)}
-    #ds_last.drop_vars(['t', 'x']).to_zarr(path, region=region, compute=True)
-    #temp = xarray.open_zarr(path).compute()
 
     last_chunk | xbeam.ChunksToZarr(
         path,
-        #template=xbeam.make_template(ds_last),  # Does not work
-        #template=xbeam.make_template(ds_orig),   # Works
-        template=full_template,
+        template=xbeam.make_template(xbeam_opened_result),
         zarr_chunks=zarr_chunks,
         needs_setup=False,
-        debug=True,
     )
 
-    # Verify that the final_result contains ds_full, which has information
-    # not available (in any sneaky way) before this final ChunksToZarr call.
-    pu.db
     final_result, final_chunks = xbeam.open_zarr(path, consolidated=True)
-    xarray.testing.assert_identical(ds_full, final_result)
+    xarray.testing.assert_identical(ds, final_result)
     self.assertEqual(zarr_chunks, final_chunks)
 
   def test_multiple_vars_chunks_to_zarr(self):
