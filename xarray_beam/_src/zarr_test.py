@@ -258,9 +258,9 @@ class DatasetToZarrTest(test_util.TestCase):
 
     # ds is the full dataset we want to write to zarr.
 
-    # Warning: Do not chunk this ds. If you do, it will secretly
-    # write itself to disk, then simply modifying the template (without
-    # even calling ChunksToZarr) is enough to make all tests pass!
+    # Warning: Do not chunk this ds. If you do, caching will make tests
+    # pass, so long as you simply modify the template (without even calling
+    # ChunksToZarr).
     ds = xarray.Dataset(
         {'foo': (('t', 'x'), np.arange(3 * 5).reshape(3, 5))},
         coords={
