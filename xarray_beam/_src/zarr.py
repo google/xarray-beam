@@ -17,12 +17,12 @@ from __future__ import annotations
 import collections
 import dataclasses
 import logging
+import os
 from typing import (
     AbstractSet,
     Any,
     Dict,
     Mapping,
-    MutableMapping,
     Optional,
     Set,
     Tuple,
@@ -39,11 +39,13 @@ import xarray
 from xarray_beam._src import core
 from xarray_beam._src import rechunk
 from xarray_beam._src import threadmap
+from zarr import storage as zarr_storage
 
 # pylint: disable=logging-fstring-interpolation
 
-ReadableStore = Union[str, Mapping[str, bytes]]
-WritableStore = Union[str, MutableMapping[str, bytes]]
+# Match the types accepted by xarray.open_zarr() and to_zarr().
+ReadableStore = Union[str, zarr_storage.StoreLike, os.PathLike[str]]
+WritableStore = Union[str, zarr_storage.StoreLike, os.PathLike[str]]
 
 
 def _infer_chunks(dataset: xarray.Dataset) -> Mapping[str, int]:
