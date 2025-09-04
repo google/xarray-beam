@@ -376,6 +376,34 @@ class DatasetToZarrTest(test_util.TestCase):
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
 
+  def test_write_chunk_not_all_dims(self):
+
+    temp_dir = self.create_tempdir().full_path
+
+    # Dataset used to infer the template and chunk, crucially
+    # "non_chunked_dim" only exists in non-chunked variables.
+    full_dataset = xarray.Dataset({
+        'chunked_var': xarray.DataArray(
+            np.arange(10), dims=('chunked_dim',)),
+        'non_chunked_var': xarray.DataArray(
+            np.arange(5), dims=('non_chunked_dim',)),
+    })
+
+    # In this case, only one of the two variables is actually chunked, and we
+    # want the other to be written to Zarr at the time of writing the template.
+    template = xbeam.make_template(full_dataset, ['chunked_var'])
+    zarr_chunks = {'chunked_dim': 1}
+    # The "non_chunked_var" will get written at this stage.
+    xbeam.setup_zarr(template, temp_dir, zarr_chunks)
+
+    # Smoke test of writing the chunk.
+    key = xbeam.Key(offsets={'chunked_dim': 0})
+    chunk = full_dataset.isel(chunked_dim=[0])
+    xbeam.validate_zarr_chunk(key, chunk, template, zarr_chunks)
+
+    # The "non_chunked_var" (and "_dim") will be dropped before writing.
+    xbeam.write_chunk_to_zarr(key, chunk, temp_dir, template)
+
   def test_chunks_to_zarr_dask_chunks(self):
     dataset = xarray.Dataset(
         {'foo': ('x', np.arange(0, 60, 10))},
