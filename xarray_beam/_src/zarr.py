@@ -433,12 +433,14 @@ def write_chunk_to_zarr(
       "chunked" with Dask, and will only have their metadata written to Zarr
       without array values.
   """
-  # Immutable dicts not considered a Mapping type which method expects.
-  region = core.offsets_to_slices(key.offsets, chunk.sizes)  # pytype: disable=wrong-arg-types
   already_written = [
       k for k in chunk.variables if k in _unchunked_vars(template)
   ]
   writable_chunk = chunk.drop_vars(already_written)
+
+  # Immutable dicts not considered a Mapping type which method expects.
+  region = core.offsets_to_slices(key.offsets, writable_chunk.sizes)  # pytype: disable=wrong-arg-types
+
   # Ensure the arrays in writable_chunk are each stored in a single dask chunk.
   writable_chunk = writable_chunk.compute().chunk()
   try:
