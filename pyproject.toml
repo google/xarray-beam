@@ -1,3 +1,50 @@
+[build-system]
+requires = ["flit_core >=3.8,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.flit.module]
+name = "xarray_beam"
+
+[project]
+name = "xarray-beam"
+dynamic = ["version"]
+description = "Distributed Xarray with Apache Beam"
+authors = [
+    {name = "Google LLC", email = "noreply@google.com"},
+]
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+# TODO(shoyer): thin these down
+dependencies = [
+    "apache_beam>=2.31.0",
+    "dask",
+    "immutabledict",
+    "rechunker>=0.5.1",
+    "zarr",
+    "xarray",
+]
+
+[project.urls]
+source = "https://github.com/google/xarray-beam"
+documentation = "https://xarray-beam.readthedocs.io"
+
+[project.optional-dependencies]
+tests = [
+    "absl-py",
+    "pandas",
+    "pytest",
+    "scipy",
+    "h5netcdf",
+]
+docs = [
+    'myst-nb',
+    'myst-parser',
+    'sphinx',
+    'sphinx_rtd_theme',
+    'scipy',
+]
+
 [tool.pyink]
 line-length = 80
 preview = true
