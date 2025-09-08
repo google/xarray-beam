@@ -33,10 +33,10 @@ from typing import (
 
 import apache_beam as beam
 import numpy as np
-from rechunker import algorithm
 import xarray
 
 from xarray_beam._src import core
+from xarray_beam._src import rechunker_algorithm as algorithm
 
 
 # pylint: disable=logging-not-lazy
