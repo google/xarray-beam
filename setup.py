@@ -20,7 +20,6 @@ base_requires = [
     'apache_beam>=2.31.0',
     'dask',
     'immutabledict',
-    'rechunker>=0.5.1',
     'zarr',
     'xarray',
 ]
@@ -33,15 +32,16 @@ docs_requires = [
 ]
 tests_requires = [
     'absl-py',
+    'h5netcdf',
+    'hypothesis',
     'pandas',
     'pytest',
     'scipy',
-    'h5netcdf'
 ]
 
 setuptools.setup(
     name='xarray-beam',
-    version='0.8.1',  # keep in sync with __init__.py
+    version='0.9.0',  # keep in sync with __init__.py
     license='Apache-2.0',
     author='Google LLC',
     author_email='noreply@google.com',
