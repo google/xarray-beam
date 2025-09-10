@@ -323,6 +323,7 @@ def setup_zarr(
     template: xarray.Dataset,
     store: WritableStore,
     zarr_chunks: Optional[Mapping[str, int]] = None,
+    zarr_format: int | None = None,
 ) -> None:
   """Setup a Zarr store.
 
@@ -336,6 +337,10 @@ def setup_zarr(
     store: a string corresponding to a Zarr path or an existing Zarr store.
     zarr_chunks: chunking scheme to use for Zarr. If set, overrides the chunking
       scheme on already chunked arrays in template.
+    zarr_format: The desired zarr format to target (currently 2 or 3). The
+      default of None will attempt to determine the zarr version from store
+      when possible, otherwise defaulting to the default version used by the
+      zarr-python library installed.
   """
   if zarr_chunks is not None:
     template = _override_chunks(template, zarr_chunks)
@@ -347,7 +352,9 @@ def setup_zarr(
     if 'chunks' in var.encoding:
       del var.encoding['chunks']
   logging.info(f'writing Zarr metadata for template:\n{template}')
-  template2.to_zarr(store, compute=False, consolidated=True, mode='w')
+  template2.to_zarr(
+      store, compute=False, consolidated=True, mode='w', zarr_format=zarr_format
+  )
 
 
 def validate_zarr_chunk(
@@ -420,6 +427,7 @@ def write_chunk_to_zarr(
     chunk: xarray.Dataset,
     store: WritableStore,
     template: xarray.Dataset,
+    zarr_format: int | None = None,
 ) -> None:
   """Write a single Dataset chunk to Zarr.
 
@@ -432,6 +440,10 @@ def write_chunk_to_zarr(
       by `xarray_beam.make_template`). One or more variables are expected to be
       "chunked" with Dask, and will only have their metadata written to Zarr
       without array values.
+    zarr_format: The desired zarr format to target (currently 2 or 3). The
+      default of None will attempt to determine the zarr version from store when
+      possible, otherwise defaulting to the default version used by the
+      zarr-python library installed.
   """
   already_written = [
       k for k in chunk.variables if k in _unchunked_vars(template)
@@ -445,7 +457,11 @@ def write_chunk_to_zarr(
   writable_chunk = writable_chunk.compute().chunk()
   try:
     future = writable_chunk.to_zarr(
-        store, region=region, compute=False, consolidated=True
+        store,
+        region=region,
+        compute=False,
+        consolidated=True,
+        zarr_format=zarr_format,
     )
     future.compute(num_workers=len(writable_chunk))
   except Exception as e:
@@ -465,6 +481,7 @@ class ChunksToZarr(beam.PTransform):
       *,
       num_threads: Optional[int] = None,
       needs_setup: bool = True,
+      zarr_format: int | None = None,
   ):
     # pyformat: disable
     """Initialize ChunksToZarr.
@@ -499,11 +516,15 @@ class ChunksToZarr(beam.PTransform):
         useful for Datasets with a small number of variables.
       needs_setup: if False, then the Zarr store is already setup and does not
         need to be set up as part of this PTransform.
+      zarr_format: The desired zarr format to target (currently 2 or 3). The
+        default of None will attempt to determine the zarr version from store
+        when possible, otherwise defaulting to the default version used by the
+        zarr-python library installed.
     """
     # pyformat: enable
     if isinstance(template, xarray.Dataset):
       if needs_setup:
-        setup_zarr(template, store, zarr_chunks)
+        setup_zarr(template, store, zarr_chunks, zarr_format)
       if zarr_chunks is None:
         zarr_chunks = _infer_zarr_chunks(template)
       template = _make_template_from_chunked(template)
@@ -534,6 +555,7 @@ class ChunksToZarr(beam.PTransform):
     self.template = template
     self.zarr_chunks = zarr_chunks
     self.num_threads = num_threads
+    self.zarr_format = zarr_format
 
   def _validate_zarr_chunk(self, key, chunk, template=None):
     # If template doesn't have a default value, Beam errors with "Side inputs
@@ -545,7 +567,9 @@ class ChunksToZarr(beam.PTransform):
 
   def _write_chunk_to_zarr(self, key, chunk, template=None):
     assert template is not None
-    return write_chunk_to_zarr(key, chunk, self.store, template)
+    return write_chunk_to_zarr(
+        key, chunk, self.store, template, self.zarr_format
+    )
 
   def expand(self, pcoll):
     if isinstance(self.template, xarray.Dataset):
@@ -561,7 +585,10 @@ class ChunksToZarr(beam.PTransform):
         )
       setup_result = beam.pvalue.AsSingleton(
           template.pvalue
-          | 'SetupZarr' >> beam.Map(setup_zarr, self.store, self.zarr_chunks)
+          | 'SetupZarr'
+          >> beam.Map(
+              setup_zarr, self.store, self.zarr_chunks, self.zarr_format
+          )
       )
     return (
         pcoll
