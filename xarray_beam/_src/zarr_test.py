@@ -22,6 +22,7 @@ import xarray
 import xarray_beam as xbeam
 from xarray_beam._src import test_util
 import zarr
+from zarr.core import chunk_key_encodings
 
 
 # pylint: disable=expression-not-assigned
@@ -238,6 +239,35 @@ class DatasetToZarrTest(test_util.TestCase):
       inputs | xbeam.ChunksToZarr(temp_dir, chunked, zarr_format=3)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
+    with self.subTest('with encoding'):
+      temp_dir = self.create_tempdir().full_path
+      encoding = {'foo': {'dtype': 'float32'}}
+      inputs | xbeam.ChunksToZarr(temp_dir, chunked, encoding=encoding)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      self.assertEqual(dataset['foo'].dtype, 'int64')
+      self.assertEqual(result['foo'].dtype, 'float32')
+    with self.subTest('with chunk key encoding'):
+      temp_dir = self.create_tempdir().full_path
+      chunk_key_encoding = chunk_key_encodings.V2ChunkKeyEncoding(separator='/')
+      encoding = dict.fromkeys(
+          dataset.data_vars,
+          {'chunk_key_encoding': chunk_key_encoding.to_dict()},
+      )
+      inputs | xbeam.ChunksToZarr(
+          temp_dir, chunked, encoding=encoding, zarr_format=2
+      )
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      self.assertEqual(dataset, result)
+      result_zarr = zarr.open(temp_dir)
+      self.assertTrue(
+          all(
+              result_zarr.metadata.consolidated_metadata.metadata[
+                  var
+              ].dimension_separator
+              == '/'
+              for var in dataset.data_vars
+          )
+      )
 
     temp_dir = self.create_tempdir().full_path
     with self.assertRaisesRegex(
