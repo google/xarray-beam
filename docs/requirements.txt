@@ -1,18 +1,18 @@
 # doc requirements
-Jinja2==3.1.3
-myst-nb==0.17.2
-myst-parser==0.18.1
-sphinx_rtd_theme==1.2.1
-sphinx==5.3.0
-scipy==1.10.1
+Jinja2==3.1.6
+myst-nb==1.3.0
+myst-parser==4.0.1
+sphinx==8.2.3
+sphinx_rtd_theme==3.0.2
+scipy==1.16.2
+matplotlib==3.10.6
 
 # xarray-beam requirements
-apache-beam==2.47.0
-dask==2023.5.1
-immutabledict==2.2.4
-numpy==1.24.3
-pandas==1.5.3
-pooch==1.7.0
-rechunker==0.5.1
-xarray==2023.5.0
-zarr==2.14.2
+apache-beam==2.67.0
+dask==2025.9.1
+immutabledict==4.2.1
+numpy==2.2.6
+pandas==2.3.2
+pooch==1.8.2
+xarray==2025.9.0
+zarr==3.1.3
