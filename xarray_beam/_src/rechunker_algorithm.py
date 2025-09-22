@@ -24,9 +24,9 @@
 Forked from Rechunker:
 https://github.com/pangeo-data/rechunker/blob/master/rechunker/algorithm.py
 """
+from collections.abc import Sequence
 import logging
 from math import ceil, floor, lcm, prod
-from typing import List, Optional, Sequence, Tuple
 import warnings
 
 import numpy as np
@@ -39,8 +39,8 @@ def consolidate_chunks(
     chunks: Sequence[int],
     itemsize: int,
     max_mem: int,
-    chunk_limits: Optional[Sequence[Optional[int]]] = None,
-) -> Tuple[int, ...]:
+    chunk_limits: Sequence[int | None] | None = None,
+) -> tuple[int, ...]:
   """Consolidate input chunks up to a certain memory limit.
 
   Consolidation starts on the highest axis and proceeds towards axis 0.
@@ -120,7 +120,7 @@ def consolidate_chunks(
 
 def _calculate_shared_chunks(
     read_chunks: Sequence[int], write_chunks: Sequence[int]
-) -> Tuple[int, ...]:
+) -> tuple[int, ...]:
   # Intermediate chunks are the smallest possible chunks which fit
   # into both read_chunks and write_chunks.
   # Example:
@@ -136,10 +136,10 @@ def _calculate_shared_chunks(
 
 
 def calculate_stage_chunks(
-    read_chunks: Tuple[int, ...],
-    write_chunks: Tuple[int, ...],
+    read_chunks: tuple[int, ...],
+    write_chunks: tuple[int, ...],
     stage_count: int = 1,
-) -> List[Tuple[int, ...]]:
+) -> list[tuple[int, ...]]:
   """Calculate chunks after each stage of a multi-stage rechunking.
 
   Each stage consists of "split" step followed by a "consolidate" step.
@@ -215,7 +215,7 @@ def calculate_single_stage_io_ops(
 MAX_STAGES = 100
 
 
-_MultistagePlan = List[Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]]
+_MultistagePlan = list[tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]]
 
 
 class ExcessiveIOWarning(Warning):
@@ -271,9 +271,9 @@ def multistage_rechunking_plan(
     write_chunks = tuple(target_chunks)
 
   if consolidate_reads:
-    read_chunk_limits: List[Optional[int]] = []
+    read_chunk_limits: list[int | None] = []
     for sc, wc in zip(source_chunks, write_chunks):
-      limit: Optional[int]
+      limit: int | None
       if wc > sc:
         # consolidate reads over this axis, up to the write chunk size
         limit = wc
@@ -292,8 +292,8 @@ def multistage_rechunking_plan(
   else:
     read_chunks = tuple(source_chunks)
 
-  prev_io_ops: Optional[float] = None
-  prev_plan: Optional[_MultistagePlan] = None
+  prev_io_ops: float | None = None
+  prev_plan: _MultistagePlan | None = None
 
   # increase the number of stages until min_mem is exceeded
   for stage_count in range(1, MAX_STAGES):
@@ -354,7 +354,7 @@ def rechunking_plan(
     max_mem: int,
     consolidate_reads: bool = True,
     consolidate_writes: bool = True,
-) -> Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]:
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
   """Calculate a plan for rechunking arrays.
 
   Parameters

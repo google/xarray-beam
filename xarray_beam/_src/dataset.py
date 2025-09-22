@@ -29,7 +29,7 @@ Usage example (not fully implemented yet!):
 from __future__ import annotations
 
 import collections
-from collections import abc
+from collections.abc import Mapping
 import dataclasses
 import itertools
 import os.path
@@ -66,7 +66,7 @@ class Dataset:
   def from_xarray(
       cls,
       source: xarray.Dataset,
-      chunks: abc.Mapping[str, int],
+      chunks: Mapping[str, int],
       split_vars: bool = False,
   ) -> Dataset:
     """Create an xarray_beam.Dataset from an xarray.Dataset."""

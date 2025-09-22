@@ -108,7 +108,7 @@ class _FlatThreadMapTuple(_ThreadMap):
 
 def _maybe_threaded(beam_transform, thread_transform):
   @functools.wraps(thread_transform)
-  def create(func, *args, num_threads=16, **kwargs):
+  def create(func, *args, num_threads: int | None = 16, **kwargs):
     if num_threads is None:
       return beam_transform(func, *args, **kwargs)
     else:

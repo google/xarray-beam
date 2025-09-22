@@ -13,28 +13,17 @@
 # limitations under the License.
 """Rechunking for xarray.Dataset objets."""
 import collections
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 import dataclasses
 import itertools
 import logging
 import math
 import textwrap
-from typing import (
-    Any,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Mapping,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import Any
 
 import apache_beam as beam
 import numpy as np
 import xarray
-
 from xarray_beam._src import core
 from xarray_beam._src import rechunker_algorithm as algorithm
 
@@ -44,9 +33,9 @@ from xarray_beam._src import rechunker_algorithm as algorithm
 
 
 def normalize_chunks(
-    chunks: Mapping[str, Union[int, Tuple[int, ...]]],
+    chunks: Mapping[str, int | tuple[int, ...]],
     dim_sizes: Mapping[str, int],
-) -> Dict[str, int]:
+) -> dict[str, int]:
   """Normalize a dict of chunks."""
   if not chunks.keys() <= dim_sizes.keys():
     raise ValueError(
@@ -78,7 +67,7 @@ def rechunking_plan(
     itemsize: int,
     min_mem: int,
     max_mem: int,
-) -> List[List[Dict[str, int]]]:
+) -> list[list[dict[str, int]]]:
   """Make a rechunking plan."""
   stages = algorithm.multistage_rechunking_plan(
       shape=tuple(dim_sizes.values()),
@@ -95,9 +84,9 @@ def rechunking_plan(
 
 
 def _consolidate_chunks_in_var_group(
-    inputs: Sequence[Tuple[core.Key, xarray.Dataset]],
-    combine_kwargs: Optional[Mapping[str, Any]],
-) -> Tuple[core.Key, xarray.Dataset]:
+    inputs: Sequence[tuple[core.Key, xarray.Dataset]],
+    combine_kwargs: Mapping[str, Any] | None,
+) -> tuple[core.Key, xarray.Dataset]:
   """Consolidate chunks across offsets with identical vars."""
   unique_offsets = collections.defaultdict(set)
   unique_var_groups = set()
@@ -176,9 +165,9 @@ def _consolidate_chunks_in_var_group(
 
 
 def consolidate_chunks(
-    inputs: Iterable[Tuple[core.Key, xarray.Dataset]],
-    combine_kwargs: Optional[Mapping[str, Any]] = None,
-) -> Iterable[Tuple[core.Key, xarray.Dataset]]:
+    inputs: Iterable[tuple[core.Key, xarray.Dataset]],
+    combine_kwargs: Mapping[str, Any] | None = None,
+) -> Iterable[tuple[core.Key, xarray.Dataset]]:
   """Consolidate chunks across offsets into (Key, Dataset) pairs."""
   inputs = list(inputs)
   keys = [key for key, _ in inputs]
@@ -209,9 +198,9 @@ def consolidate_chunks(
 
 
 def consolidate_variables(
-    inputs: Iterable[Tuple[core.Key, xarray.Dataset]],
-    merge_kwargs: Optional[Mapping[str, Any]] = None,
-) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+    inputs: Iterable[tuple[core.Key, xarray.Dataset]],
+    merge_kwargs: Mapping[str, Any] | None = None,
+) -> Iterator[tuple[core.Key, xarray.Dataset]]:
   """Consolidate chunks across distinct variables into (Key, Dataset) pairs."""
   kwargs = dict(
       compat='equals',
@@ -249,11 +238,11 @@ def consolidate_variables(
 
 
 def consolidate_fully(
-    inputs: Iterable[Tuple[core.Key, xarray.Dataset]],
+    inputs: Iterable[tuple[core.Key, xarray.Dataset]],
     *,
-    merge_kwargs: Optional[Mapping[str, Any]] = None,
-    combine_kwargs: Optional[Mapping[str, Any]] = None,
-) -> Tuple[core.Key, xarray.Dataset]:
+    merge_kwargs: Mapping[str, Any] | None = None,
+    combine_kwargs: Mapping[str, Any] | None = None,
+) -> tuple[core.Key, xarray.Dataset]:
   """Consolidate chunks via merge/concat into a single (Key, Dataset) pair."""
   concatenated_chunks = []
   combined_offsets = {}
@@ -383,7 +372,7 @@ def _split_chunk_bounds(
     start: int,
     stop: int,
     multiple: int,
-) -> List[Tuple[int, int]]:
+) -> list[tuple[int, int]]:
   # pylint: disable=g-doc-args
   # pylint: disable=g-doc-return-or-yield
   """Calculate the size of divided chunks along a dimension.
@@ -409,7 +398,7 @@ def split_chunks(
     key: core.Key,
     dataset: xarray.Dataset,
     target_chunks: Mapping[str, int],
-) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+) -> Iterator[tuple[core.Key, xarray.Dataset]]:
   """Split a single (Key, xarray.Dataset) pair into many chunks."""
   # This function splits consolidated arrays into blocks of new sizes, e.g.,
   #       ⌈x_00 x_01 ...⌉   ⌈⌈x_00⌉ ⌈x_01⌉ ...⌉
@@ -455,7 +444,7 @@ class SplitChunks(beam.PTransform):
 def split_variables(
     key: core.Key,
     dataset: xarray.Dataset,
-) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+) -> Iterator[tuple[core.Key, xarray.Dataset]]:
   """Split a single (Key, xarray.Dataset) pair into separate variables."""
   # TODO(shoyer): add support for partial splitting, into explicitly provided
   # sets of variables
@@ -475,9 +464,9 @@ class SplitVariables(beam.PTransform):
 
 
 def in_memory_rechunk(
-    inputs: List[Tuple[core.Key, xarray.Dataset]],
+    inputs: list[tuple[core.Key, xarray.Dataset]],
     target_chunks: Mapping[str, int],
-) -> Iterator[Tuple[core.Key, xarray.Dataset]]:
+) -> Iterator[tuple[core.Key, xarray.Dataset]]:
   """Rechunk in-memory pairs of (Key, xarray.Dataset)."""
   consolidated = consolidate_chunks(inputs)
   for key, dataset in consolidated:
@@ -517,11 +506,11 @@ class Rechunk(beam.PTransform):
   def __init__(
       self,
       dim_sizes: Mapping[str, int],
-      source_chunks: Mapping[str, Union[int, Tuple[int, ...]]],
-      target_chunks: Mapping[str, Union[int, Tuple[int, ...]]],
+      source_chunks: Mapping[str, int | tuple[int, ...]],
+      target_chunks: Mapping[str, int | tuple[int, ...]],
       itemsize: int,
-      min_mem: Optional[int] = None,
-      max_mem: int = 2 ** 30,  # 1 GB
+      min_mem: int | None = None,
+      max_mem: int = 2**30,  # 1 GB
   ):
     """Initialize Rechunk().
 

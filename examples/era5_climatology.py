@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Calculate climatology for the Pangeo ERA5 surface dataset."""
-from typing import Tuple
-
 from absl import app
 from absl import flags
 import apache_beam as beam
@@ -32,7 +30,7 @@ RUNNER = flags.DEFINE_string('runner', None, 'beam.runners.Runner')
 
 def rekey_chunk_on_month_hour(
     key: xbeam.Key, dataset: xarray.Dataset
-) -> Tuple[xbeam.Key, xarray.Dataset]:
+) -> tuple[xbeam.Key, xarray.Dataset]:
   """Replace the 'time' dimension with 'month'/'hour'."""
   month = dataset.time.dt.month.item()
   hour = dataset.time.dt.hour.item()

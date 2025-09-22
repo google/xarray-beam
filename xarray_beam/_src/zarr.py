@@ -15,19 +15,11 @@
 from __future__ import annotations
 
 import collections
+from collections.abc import Mapping, Set
 import dataclasses
 import logging
 import os
-from typing import (
-    AbstractSet,
-    Any,
-    Dict,
-    Mapping,
-    Optional,
-    Set,
-    Tuple,
-    Union,
-)
+from typing import Any
 import warnings
 
 import apache_beam as beam
@@ -44,8 +36,8 @@ from zarr import storage as zarr_storage
 # pylint: disable=logging-fstring-interpolation
 
 # Match the types accepted by xarray.open_zarr() and to_zarr().
-ReadableStore = Union[str, zarr_storage.StoreLike, os.PathLike[str]]
-WritableStore = Union[str, zarr_storage.StoreLike, os.PathLike[str]]
+ReadableStore = str | zarr_storage.StoreLike | os.PathLike[str]
+WritableStore = str | zarr_storage.StoreLike | os.PathLike[str]
 
 
 def _infer_chunks(dataset: xarray.Dataset) -> Mapping[str, int]:
@@ -73,7 +65,7 @@ def _infer_chunks(dataset: xarray.Dataset) -> Mapping[str, int]:
 
 def open_zarr(
     store: ReadableStore, **kwargs: Any
-) -> Tuple[xarray.Dataset, Mapping[str, int]]:
+) -> tuple[xarray.Dataset, Mapping[str, int]]:
   """Returns a lazily indexable xarray.Dataset and chunks from a Zarr store.
 
   Only Zarr stores with the consistent chunking between non-indexed variables
@@ -107,7 +99,7 @@ def _raise_template_error():
 
 def make_template(
     dataset: xarray.Dataset,
-    lazy_vars: Optional[AbstractSet[str]] = None,
+    lazy_vars: Set[str] | None = None,
 ) -> xarray.Dataset:
   """Make a lazy Dask xarray.Dataset for use only as a template.
 
@@ -178,21 +170,27 @@ def replace_template_dims(
     # Dimensions:    (time: 1, longitude: 1440, latitude: 721)
     # Coordinates:
     #   * time       (time) datetime64[ns] 8B 1940-01-01
-    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5 359.8
-    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75 90.0
+    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5
+    359.8
+    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75
+    90.0
     # Data variables:
-    #     foo        (time, longitude, latitude) float64 8MB dask.array<chunksize=(1, 1440, 721), meta=np.ndarray>
+    #     foo        (time, longitude, latitude) float64 8MB
+    dask.array<chunksize=(1, 1440, 721), meta=np.ndarray>
 
     template = xbeam.replace_template_dims(template, time=times)
     print(template)
     # <xarray.Dataset> Size: 6TB
     # Dimensions:    (time: 747769, longitude: 1440, latitude: 721)
     # Coordinates:
-    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5 359.8
-    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75 90.0
+    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5
+    359.8
+    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75
+    90.0
     #   * time       (time) datetime64[ns] 6MB 1940-01-01 ... 2025-04-21
     # Data variables:
-    #     foo        (time, longitude, latitude) float64 6TB dask.array<chunksize=(747769, 1440, 721), meta=np.ndarray>
+    #     foo        (time, longitude, latitude) float64 6TB
+    dask.array<chunksize=(747769, 1440, 721), meta=np.ndarray>
 
   Args:
     template: The template to replace dimensions in.
@@ -212,7 +210,8 @@ def replace_template_dims(
           f' calling replace_template_dims(): {template}'
       )
     expansions[name] = {
-        dim: replacement for dim, replacement in dim_replacements.items()
+        dim: replacement
+        for dim, replacement in dim_replacements.items()
         if dim in variable.dims
     }
   template = template.isel({dim: 0 for dim in dim_replacements}, drop=True)
@@ -221,11 +220,11 @@ def replace_template_dims(
   return template
 
 
-def _unchunked_vars(ds: xarray.Dataset) -> Set[str]:
+def _unchunked_vars(ds: xarray.Dataset) -> set[str]:
   return {k for k, v in ds.variables.items() if v.chunks is None}  # pytype: disable=bad-return-type
 
 
-def _chunked_vars(ds: xarray.Dataset) -> Set[str]:
+def _chunked_vars(ds: xarray.Dataset) -> set[str]:
   return set(ds.variables.keys()) - _unchunked_vars(ds)  # pytype: disable=bad-return-type
 
 
@@ -298,7 +297,7 @@ def _override_chunks(
   return xarray.Dataset(data_vars, coords, dataset.attrs)
 
 
-def _dask_to_zarr_chunksize(dim: str, sizes: Tuple[int, ...]) -> int:
+def _dask_to_zarr_chunksize(dim: str, sizes: tuple[int, ...]) -> int:
   if not sizes:
     return 0
   # It's OK for the last chunk of Zarr array to have smaller size. Otherwise,
@@ -312,7 +311,7 @@ def _dask_to_zarr_chunksize(dim: str, sizes: Tuple[int, ...]) -> int:
   return sizes[0]
 
 
-def _infer_zarr_chunks(dataset: xarray.Dataset) -> Dict[str, int]:
+def _infer_zarr_chunks(dataset: xarray.Dataset) -> dict[str, int]:
   return {  # pytype: disable=bad-return-type
       dim: _dask_to_zarr_chunksize(dim, sizes)  # pytype: disable=wrong-arg-types
       for dim, sizes in dataset.chunks.items()
@@ -322,9 +321,9 @@ def _infer_zarr_chunks(dataset: xarray.Dataset) -> Dict[str, int]:
 def setup_zarr(
     template: xarray.Dataset,
     store: WritableStore,
-    zarr_chunks: Optional[Mapping[str, int]] = None,
+    zarr_chunks: Mapping[str, int] | None = None,
     zarr_format: int | None = None,
-    encoding: Optional[Mapping[str, Any]] = None,
+    encoding: Mapping[str, Any] | None = None,
 ) -> None:
   """Setup a Zarr store.
 
@@ -339,12 +338,11 @@ def setup_zarr(
     zarr_chunks: chunking scheme to use for Zarr. If set, overrides the chunking
       scheme on already chunked arrays in template.
     zarr_format: The desired zarr format to target (currently 2 or 3). The
-      default of None will attempt to determine the zarr version from store
-      when possible, otherwise defaulting to the default version used by the
-      zarr-python library installed.
-    encoding : Nested dictionary with variable names as keys and dictionaries
-      of variable specific encodings as values, e.g.,
-      ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
+      default of None will attempt to determine the zarr version from store when
+      possible, otherwise defaulting to the default version used by the
+      zarr-python library installed. encoding : Nested dictionary with variable
+      names as keys and dictionaries of variable specific encodings as values,
+      e.g., ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
   """
   if zarr_chunks is not None:
     template = _override_chunks(template, zarr_chunks)
@@ -370,7 +368,7 @@ def validate_zarr_chunk(
     key: core.Key,
     chunk: xarray.Dataset,
     template: xarray.Dataset,
-    zarr_chunks: Optional[Mapping[str, int]] = None,
+    zarr_chunks: Mapping[str, int] | None = None,
 ) -> None:
   """Check a chunk for consistency against the given template.
 
@@ -437,7 +435,7 @@ def write_chunk_to_zarr(
     store: WritableStore,
     template: xarray.Dataset,
     zarr_format: int | None = None,
-    encoding: Optional[Mapping[str, Any]] = None,
+    encoding: Mapping[str, Any] | None = None,
 ) -> None:
   """Write a single Dataset chunk to Zarr.
 
@@ -453,10 +451,9 @@ def write_chunk_to_zarr(
     zarr_format: The desired zarr format to target (currently 2 or 3). The
       default of None will attempt to determine the zarr version from store when
       possible, otherwise defaulting to the default version used by the
-      zarr-python library installed.
-    encoding : Nested dictionary with variable names as keys and dictionaries
-      of variable specific encodings as values, e.g.,
-      ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
+      zarr-python library installed. encoding : Nested dictionary with variable
+      names as keys and dictionaries of variable specific encodings as values,
+      e.g., ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
   """
   already_written = [
       k for k in chunk.variables if k in _unchunked_vars(template)
@@ -491,13 +488,13 @@ class ChunksToZarr(beam.PTransform):
   def __init__(
       self,
       store: WritableStore,
-      template: Union[xarray.Dataset, beam.pvalue.AsSingleton, None] = None,
-      zarr_chunks: Optional[Mapping[str, int]] = None,
+      template: xarray.Dataset | beam.pvalue.AsSingleton | None = None,
+      zarr_chunks: Mapping[str, int] | None = None,
       *,
-      num_threads: Optional[int] = None,
+      num_threads: int | None = None,
       needs_setup: bool = True,
       zarr_format: int | None = None,
-      encoding: Optional[Mapping[str, Any]] = None,
+      encoding: Mapping[str, Any] | None = None,
   ):
     # pyformat: disable
     """Initialize ChunksToZarr.
@@ -634,7 +631,7 @@ class DatasetToZarr(beam.PTransform):
 
   dataset: xarray.Dataset
   store: WritableStore
-  zarr_chunks: Optional[Mapping[str, int]] = None
+  zarr_chunks: Mapping[str, int] | None = None
 
   def expand(self, pcoll):
     # Unchunked variables will be written eagerly via the template, so there's

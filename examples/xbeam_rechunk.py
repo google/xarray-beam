@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Rechunk a Zarr dataset."""
-from typing import Dict
-
 from absl import app
 from absl import flags
 import apache_beam as beam
@@ -38,7 +36,7 @@ RUNNER = flags.DEFINE_string('runner', None, help='beam.runners.Runner')
 # pylint: disable=expression-not-assigned
 
 
-def _parse_chunks_str(chunks_str: str) -> Dict[str, int]:
+def _parse_chunks_str(chunks_str: str) -> dict[str, int]:
   chunks = {}
   parts = chunks_str.split(',')
   for part in parts:

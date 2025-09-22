@@ -13,8 +13,8 @@
 # limitations under the License.
 """Combiners for xarray-beam."""
 from __future__ import annotations
+from collections.abc import Sequence
 import dataclasses
-from typing import Optional, Sequence, Union
 
 import apache_beam as beam
 import numpy.typing as npt
@@ -26,7 +26,7 @@ from xarray_beam._src import core
 # TODO(shoyer): add other combiners: sum, std, var, min, max, etc.
 
 
-DimLike = Optional[Union[str, Sequence[str]]]
+DimLike = str | Sequence[str] | None
 
 
 @dataclasses.dataclass
@@ -35,7 +35,7 @@ class MeanCombineFn(beam.transforms.CombineFn):
 
   dim: DimLike = None
   skipna: bool = True
-  dtype: Optional[npt.DTypeLike] = None
+  dtype: npt.DTypeLike | None = None
 
   def create_accumulator(self):
     return (0, 0)
@@ -80,10 +80,10 @@ class MeanCombineFn(beam.transforms.CombineFn):
 class Mean(beam.PTransform):
   """Calculate the mean over one or more distributed dataset dimensions."""
 
-  dim: Union[str, Sequence[str]]
+  dim: str | Sequence[str]
   skipna: bool = True
-  dtype: Optional[npt.DTypeLike] = None
-  fanout: Optional[int] = None
+  dtype: npt.DTypeLike | None = None
+  fanout: int | None = None
 
   def _update_key(
       self, key: core.Key, chunk: xarray.Dataset
@@ -105,8 +105,8 @@ class Mean(beam.PTransform):
 
     dim: DimLike = None
     skipna: bool = True
-    dtype: Optional[npt.DTypeLike] = None
-    fanout: Optional[int] = None
+    dtype: npt.DTypeLike | None = None
+    fanout: int | None = None
 
     def expand(self, pcoll):
       combine_fn = MeanCombineFn(self.dim, self.skipna, self.dtype)
@@ -118,8 +118,8 @@ class Mean(beam.PTransform):
 
     dim: DimLike = None
     skipna: bool = True
-    dtype: Optional[npt.DTypeLike] = None
-    fanout: Optional[int] = None
+    dtype: npt.DTypeLike | None = None
+    fanout: int | None = None
 
     def expand(self, pcoll):
       combine_fn = MeanCombineFn(self.dim, self.skipna, self.dtype)

@@ -12,21 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Core data model for xarray-beam."""
+from collections.abc import Iterator, Mapping, Sequence, Set
 import itertools
 import math
-from typing import (
-    AbstractSet,
-    Dict,
-    Generic,
-    Iterator,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    TypeVar,
-    Union,
-)
+from typing import Generic, TypeVar
 
 import apache_beam as beam
 import immutabledict
@@ -90,8 +79,8 @@ class Key:
 
   def __init__(
       self,
-      offsets: Optional[Mapping[str, int]] = None,
-      vars: Optional[AbstractSet[str]] = None,
+      offsets: Mapping[str, int] | None = None,
+      vars: Set[str] | None = None,
   ):
     if offsets is None:
       offsets = {}
@@ -102,8 +91,8 @@ class Key:
 
   def replace(
       self,
-      offsets: Union[Mapping[str, int], object] = _DEFAULT,
-      vars: Union[AbstractSet[str], None, object] = _DEFAULT,
+      offsets: Mapping[str, int] | object = _DEFAULT,
+      vars: Set[str] | None | object = _DEFAULT,
   ) -> "Key":
     if offsets is _DEFAULT:
       offsets = self.offsets
@@ -111,7 +100,7 @@ class Key:
       vars = self.vars
     return type(self)(offsets, vars)
 
-  def with_offsets(self, **offsets: Optional[int]) -> "Key":
+  def with_offsets(self, **offsets: int | None) -> "Key":
     new_offsets = dict(self.offsets)
     for k, v in offsets.items():
       if v is None:
@@ -150,8 +139,8 @@ class Key:
 def offsets_to_slices(
     offsets: Mapping[str, int],
     sizes: Mapping[str, int],
-    base: Optional[Mapping[str, int]] = None,
-) -> Dict[str, slice]:
+    base: Mapping[str, int] | None = None,
+) -> dict[str, slice]:
   """Convert offsets into slices with an optional base offset.
 
   Args:
@@ -191,7 +180,7 @@ def offsets_to_slices(
 
 def _chunks_to_offsets(
     chunks: Mapping[str, Sequence[int]],
-) -> Dict[str, List[int]]:
+) -> dict[str, list[int]]:
   return {
       dim: np.concatenate([[0], np.cumsum(sizes)[:-1]]).tolist()
       for dim, sizes in chunks.items()
@@ -200,7 +189,7 @@ def _chunks_to_offsets(
 
 def iter_chunk_keys(
     offsets: Mapping[str, Sequence[int]],
-    vars: Optional[AbstractSet[str]] = None,  # pylint: disable=redefined-builtin
+    vars: Set[str] | None = None,  # pylint: disable=redefined-builtin
 ) -> Iterator[Key]:
   """Iterate over the Key objects corresponding to the given chunks."""
   chunk_indices = [range(len(sizes)) for sizes in offsets.values()]
@@ -213,7 +202,7 @@ def iter_chunk_keys(
 
 def compute_offset_index(
     offsets: Mapping[str, Sequence[int]],
-) -> Dict[str, Dict[int, int]]:
+) -> dict[str, dict[int, int]]:
   """Compute a mapping from chunk offsets to chunk indices."""
   index = {}
   for dim, dim_offsets in offsets.items():
@@ -224,9 +213,9 @@ def compute_offset_index(
 
 
 def normalize_expanded_chunks(
-    chunks: Mapping[str, Union[int, Tuple[int, ...]]],
+    chunks: Mapping[str, int | tuple[int, ...]],
     dim_sizes: Mapping[str, int],
-) -> Dict[str, Tuple[int, ...]]:
+) -> dict[str, tuple[int, ...]]:
   # pylint: disable=g-doc-args
   # pylint: disable=g-doc-return-or-yield
   """Normalize a dict of chunks to give the expanded size of each block.
@@ -257,7 +246,7 @@ def normalize_expanded_chunks(
 
 
 DatasetOrDatasets = TypeVar(
-    "DatasetOrDatasets", xarray.Dataset, List[xarray.Dataset]
+    "DatasetOrDatasets", xarray.Dataset, list[xarray.Dataset]
 )
 
 
@@ -267,9 +256,9 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
   def __init__(
       self,
       dataset: DatasetOrDatasets,
-      chunks: Optional[Mapping[str, Union[int, Tuple[int, ...]]]] = None,
+      chunks: Mapping[str, int | tuple[int, ...]] | None = None,
       split_vars: bool = False,
-      num_threads: Optional[int] = None,
+      num_threads: int | None = None,
       shard_keys_threshold: int = 200_000,
   ):
     """Initialize DatasetToChunks.
@@ -325,7 +314,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     return self._datasets[0]
 
   @property
-  def _datasets(self) -> List[xarray.Dataset]:
+  def _datasets(self) -> list[xarray.Dataset]:
     if isinstance(self.dataset, xarray.Dataset):
       return [self.dataset]
     return list(self.dataset)  # pytype: disable=bad-return-type
@@ -371,7 +360,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
       total += int(np.prod(count_list))
     return total
 
-  def _shard_count(self) -> Optional[int]:
+  def _shard_count(self) -> int | None:
     """Determine the number of times to shard input keys."""
     task_count = self._task_count()
     if task_count <= self.shard_keys_threshold:
@@ -397,7 +386,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         yield from iter_chunk_keys(relevant_offsets, vars={name})  # pytype: disable=wrong-arg-types  # always-use-property-annotation
 
   def _iter_shard_keys(
-      self, shard_id: Optional[int], var_name: Optional[str]
+      self, shard_id: int | None, var_name: str | None
   ) -> Iterator[Key]:
     """Iterate over Key objects for a specific shard and variable."""
     if var_name is None:
@@ -417,7 +406,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
       vars_ = {var_name} if self.split_vars else None
       yield from iter_chunk_keys(offsets, vars=vars_)
 
-  def _shard_inputs(self) -> List[Tuple[Optional[int], Optional[str]]]:
+  def _shard_inputs(self) -> list[tuple[int | None, str | None]]:
     """Create inputs for sharded key iterators."""
     if not self.split_vars:
       return [(i, None) for i in range(self.shard_count)]
@@ -430,7 +419,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         inputs.append((None, name))
     return inputs  # pytype: disable=bad-return-type  # always-use-property-annotation
 
-  def _key_to_chunks(self, key: Key) -> Iterator[Tuple[Key, DatasetOrDatasets]]:
+  def _key_to_chunks(self, key: Key) -> Iterator[tuple[Key, DatasetOrDatasets]]:
     """Convert a Key into an in-memory (Key, xarray.Dataset) pair."""
     sizes = {
         dim: self.expanded_chunks[dim][self.offset_index[dim][offset]]
