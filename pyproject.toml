@@ -35,6 +35,7 @@ tests = [
     "hypothesis",
     "pandas",
     "pytest",
+    'zarr>=3',
 ]
 docs = [
     'myst-nb',

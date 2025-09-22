@@ -219,6 +219,13 @@ class DatasetToZarrTest(test_util.TestCase):
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
       self.assertEqual(result.chunks, {'x': (3, 3)})
+    with self.subTest('with minus one zarr_chunks'):
+      temp_dir = self.create_tempdir().full_path
+      zarr_chunks = {'x': -1}
+      inputs | xbeam.ChunksToZarr(temp_dir, chunked, zarr_chunks)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      xarray.testing.assert_identical(dataset, result)
+      self.assertEqual(result.chunks, {'x': (6,)})
     with self.subTest('with zarr_chunks and no template'):
       temp_dir = self.create_tempdir().full_path
       zarr_chunks = {'x': 3}
@@ -239,35 +246,6 @@ class DatasetToZarrTest(test_util.TestCase):
       inputs | xbeam.ChunksToZarr(temp_dir, chunked, zarr_format=3)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
-    with self.subTest('with encoding'):
-      temp_dir = self.create_tempdir().full_path
-      encoding = {'foo': {'dtype': 'float32'}}
-      inputs | xbeam.ChunksToZarr(temp_dir, chunked, encoding=encoding)
-      result = xarray.open_zarr(temp_dir, consolidated=True)
-      self.assertEqual(dataset['foo'].dtype, 'int64')
-      self.assertEqual(result['foo'].dtype, 'float32')
-    with self.subTest('with chunk key encoding'):
-      temp_dir = self.create_tempdir().full_path
-      chunk_key_encoding = chunk_key_encodings.V2ChunkKeyEncoding(separator='/')
-      encoding = dict.fromkeys(
-          dataset.data_vars,
-          {'chunk_key_encoding': chunk_key_encoding.to_dict()},
-      )
-      inputs | xbeam.ChunksToZarr(
-          temp_dir, chunked, encoding=encoding, zarr_format=2
-      )
-      result = xarray.open_zarr(temp_dir, consolidated=True)
-      self.assertEqual(dataset, result)
-      result_zarr = zarr.open(temp_dir)
-      self.assertTrue(
-          all(
-              result_zarr.metadata.consolidated_metadata.metadata[
-                  var
-              ].dimension_separator
-              == '/'
-              for var in dataset.data_vars
-          )
-      )
 
     temp_dir = self.create_tempdir().full_path
     with self.assertRaisesRegex(
@@ -293,6 +271,161 @@ class DatasetToZarrTest(test_util.TestCase):
         'unexpected new indexes found in chunk',
     ):
       inputs2 | xbeam.ChunksToZarr(temp_dir, template)
+
+  def test_chunks_to_zarr_with_encoding(self):
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(0, 60, 10))},
+        coords={'x': np.arange(6)},
+    )
+    chunked = dataset.chunk()
+    inputs = [
+        (xbeam.Key({'x': 0}), dataset),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    encoding = {'foo': {'dtype': 'float32'}}
+    inputs | xbeam.ChunksToZarr(temp_dir, chunked, encoding=encoding)
+    result = xarray.open_zarr(temp_dir, consolidated=True)
+    self.assertEqual(dataset['foo'].dtype, 'int64')
+    self.assertEqual(result['foo'].dtype, 'float32')
+
+    with self.assertRaisesWithLiteralMatch(
+        ValueError, "encoding contains key not present in template: 'bar'"
+    ):
+      xbeam.ChunksToZarr(
+          temp_dir,
+          chunked,
+          encoding={'bar': {'dtype': 'float32'}},
+      )
+
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        "encoding for 'foo' includes 'chunks' or 'shards', which must be"
+        " specified via zarr_chunks or zarr_shards: {'chunks': (1,)}",
+    ):
+      xbeam.ChunksToZarr(
+          temp_dir,
+          chunked,
+          encoding={'foo': {'chunks': (1,)}},
+      )
+
+  def test_chunks_to_zarr_with_chunk_key_encoding(self):
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(0, 60, 10))},
+        coords={'x': np.arange(6)},
+    )
+    chunked = dataset.chunk()
+    inputs = [
+        (xbeam.Key({'x': 0}), dataset),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    chunk_key_encoding = chunk_key_encodings.V2ChunkKeyEncoding(separator='/')
+    encoding = dict.fromkeys(
+        dataset.data_vars,
+        {'chunk_key_encoding': chunk_key_encoding.to_dict()},
+    )
+    inputs | xbeam.ChunksToZarr(
+        temp_dir, chunked, encoding=encoding, zarr_format=2
+    )
+    result = xarray.open_zarr(temp_dir, consolidated=True)
+    self.assertEqual(dataset, result)
+    result_zarr = zarr.open(temp_dir)
+    self.assertTrue(
+        all(
+            result_zarr.metadata.consolidated_metadata.metadata[
+                var
+            ].dimension_separator
+            == '/'
+            for var in dataset.data_vars
+        )
+    )
+
+  def test_chunks_to_zarr_with_sharding(self):
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(0, 60, 10))},
+        coords={'x': np.arange(6)},
+    )
+    template = xbeam.make_template(dataset)
+    inputs = [
+        (xbeam.Key({'x': 0}), dataset.isel(x=slice(0, 3))),
+        (xbeam.Key({'x': 3}), dataset.isel(x=slice(3, 6))),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    inputs | xbeam.ChunksToZarr(
+        temp_dir,
+        template=template,
+        zarr_chunks={'x': 1},
+        zarr_shards={'x': 3},
+        zarr_format=3,
+    )
+    result = xarray.open_zarr(temp_dir, consolidated=True)
+    xarray.testing.assert_identical(dataset, result)
+    result_zarr = zarr.open(temp_dir)
+    self.assertEqual(result_zarr['foo'].chunks, (1,))
+    self.assertEqual(result_zarr['foo'].shards, (3,))
+
+  def test_chunks_to_zarr_with_sharding_minus_one(self):
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(0, 60, 10))},
+        coords={'x': np.arange(6)},
+    )
+    template = xbeam.make_template(dataset)
+    inputs = [
+        (xbeam.Key({'x': 0}), dataset),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    inputs | xbeam.ChunksToZarr(
+        temp_dir,
+        template=template,
+        zarr_chunks={'x': 2},
+        zarr_shards={'x': -1},
+        zarr_format=3,
+    )
+    result = xarray.open_zarr(temp_dir, consolidated=True)
+    xarray.testing.assert_identical(dataset, result)
+    result_zarr = zarr.open(temp_dir)
+    self.assertEqual(result_zarr['foo'].chunks, (2,))
+    self.assertEqual(result_zarr['foo'].shards, (6,))
+
+  def test_chunks_to_zarr_with_partially_specified_sharding(self):
+    dataset = xarray.Dataset(
+        {'foo': (('x', 'y'), np.arange(6).reshape(2, 3))},
+    )
+    template = xbeam.make_template(dataset)
+    inputs = [
+        (xbeam.Key({'x': 0, 'y': 0}), dataset),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    inputs | xbeam.ChunksToZarr(
+        temp_dir,
+        template=template,
+        zarr_chunks={'x': 1, 'y': 1},
+        zarr_shards={'x': 2},
+        zarr_format=3,
+    )
+    result = xarray.open_zarr(temp_dir, consolidated=True)
+    xarray.testing.assert_identical(dataset, result)
+    result_zarr = zarr.open(temp_dir)
+    self.assertEqual(result_zarr['foo'].chunks, (1, 1))
+    self.assertEqual(result_zarr['foo'].shards, (2, 1))
+
+  def test_chunks_to_zarr_with_invalid_shards(self):
+    dataset = xarray.Dataset(
+        {'foo': (('x', 'y'), np.arange(6).reshape(2, 3))},
+    )
+    template = xbeam.make_template(dataset)
+    temp_dir = self.create_tempdir().full_path
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        "shard sizes are not all evenly divisible by chunk sizes: "
+        "shards={'x': 1, 'y': 1}, chunks={'x': 2, 'y': 3}",
+    ):
+      xbeam.ChunksToZarr(
+          temp_dir,
+          template=template,
+          zarr_chunks={'x': 2, 'y': 3},
+          zarr_shards={'x': 1, 'y': 1},
+          zarr_format=3,
+      )
 
   def test_chunks_to_zarr_append(self):
     zarr_chunks = {'t': 1, 'x': 5}
@@ -399,7 +532,9 @@ class DatasetToZarrTest(test_util.TestCase):
     with self.subTest('partial key'):
       inputs = [(xbeam.Key({'x': 0}), dataset)]
       temp_dir = self.create_tempdir().full_path
-      inputs | xbeam.ChunksToZarr(temp_dir, template=dataset.chunk())
+      inputs | xbeam.ChunksToZarr(
+          temp_dir, template=xbeam.make_template(dataset)
+      )
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
     with self.subTest('split along partial key'):
@@ -413,7 +548,9 @@ class DatasetToZarrTest(test_util.TestCase):
     with self.subTest('full key'):
       inputs = [(xbeam.Key({'x': 0, 'y': 0}), dataset)]
       temp_dir = self.create_tempdir().full_path
-      inputs | xbeam.ChunksToZarr(temp_dir, template=dataset.chunk())
+      inputs | xbeam.ChunksToZarr(
+          temp_dir, template=xbeam.make_template(dataset)
+      )
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
 
@@ -424,10 +561,10 @@ class DatasetToZarrTest(test_util.TestCase):
     # Dataset used to infer the template and chunk, crucially
     # "non_chunked_dim" only exists in non-chunked variables.
     full_dataset = xarray.Dataset({
-        'chunked_var': xarray.DataArray(
-            np.arange(10), dims=('chunked_dim',)),
+        'chunked_var': xarray.DataArray(np.arange(10), dims=('chunked_dim',)),
         'non_chunked_var': xarray.DataArray(
-            np.arange(5), dims=('non_chunked_dim',)),
+            np.arange(5), dims=('non_chunked_dim',)
+        ),
     })
 
     # In this case, only one of the two variables is actually chunked, and we
@@ -490,7 +627,7 @@ class DatasetToZarrTest(test_util.TestCase):
     xbeam.validate_zarr_chunk(
         key=xbeam.Key({'x': 0}),
         chunk=dataset,
-        template=dataset.chunk(),
+        template=xbeam.make_template(dataset),
         zarr_chunks=None,
     )
 
@@ -522,12 +659,22 @@ class DatasetToZarrTest(test_util.TestCase):
         ValueError, 'chunk is smaller than zarr chunks'
     ):
       inputs | xbeam.ChunksToZarr(
-          temp_dir, template=ds.chunk(), zarr_chunks={'x': 6}
+          temp_dir, template=xbeam.make_template(ds), zarr_chunks={'x': 6}
       )
     with self.assertRaisesRegex(
         ValueError, 'chunk is smaller than zarr chunks'
     ):
-      inputs | xbeam.ChunksToZarr(temp_dir, template=ds.chunk())
+      inputs | xbeam.ChunksToZarr(temp_dir, template=xbeam.make_template(ds))
+    with self.assertRaisesRegex(
+        ValueError, 'chunk is smaller than zarr shards'
+    ):
+      inputs | xbeam.ChunksToZarr(
+          temp_dir,
+          template=xbeam.make_template(ds),
+          zarr_chunks={'x': 3},
+          zarr_shards={'x': 6},
+          zarr_format=3,
+      )
 
   def test_to_zarr_fixed_template(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
@@ -544,22 +691,22 @@ class DatasetToZarrTest(test_util.TestCase):
     actual = xarray.open_zarr(temp_dir, consolidated=True)
     xarray.testing.assert_identical(actual, dataset)
 
-  def test_infer_zarr_chunks(self):
+  def test_zarr_from_dask_chunks(self):
     dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
 
-    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset)
+    chunks = xbeam._src.zarr._zarr_from_dask_chunks(dataset)
     self.assertEqual(chunks, {})
 
-    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset.chunk())
+    chunks = xbeam._src.zarr._zarr_from_dask_chunks(dataset.chunk())
     self.assertEqual(chunks, {'x': 6})
 
-    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset.head(0).chunk())
+    chunks = xbeam._src.zarr._zarr_from_dask_chunks(dataset.head(0).chunk())
     self.assertEqual(chunks, {'x': 0})
 
-    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset.chunk(3))
+    chunks = xbeam._src.zarr._zarr_from_dask_chunks(dataset.chunk(3))
     self.assertEqual(chunks, {'x': 3})
 
-    chunks = xbeam._src.zarr._infer_zarr_chunks(dataset.chunk(4))
+    chunks = xbeam._src.zarr._zarr_from_dask_chunks(dataset.chunk(4))
     self.assertEqual(chunks, {'x': 4})
 
     with self.assertRaisesRegex(
@@ -569,7 +716,7 @@ class DatasetToZarrTest(test_util.TestCase):
             '(2, 4)'
         ),
     ):
-      xbeam._src.zarr._infer_zarr_chunks(dataset.chunk({'x': (2, 4)}))
+      xbeam._src.zarr._zarr_from_dask_chunks(dataset.chunk({'x': (2, 4)}))
 
     with self.assertRaisesRegex(
         ValueError,
@@ -578,7 +725,7 @@ class DatasetToZarrTest(test_util.TestCase):
             '(3, 2, 1)'
         ),
     ):
-      xbeam._src.zarr._infer_zarr_chunks(dataset.chunk({'x': (3, 2, 1)}))
+      xbeam._src.zarr._zarr_from_dask_chunks(dataset.chunk({'x': (3, 2, 1)}))
 
   def test_chunks_to_zarr_docs_demo(self):
     # verify that the ChunksToChunk demo from our docs works

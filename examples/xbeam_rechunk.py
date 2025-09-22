@@ -30,6 +30,21 @@ TARGET_CHUNKS = flags.DEFINE_string(
         'chunksize of -1 indicates not to chunk a dimension.'
     ),
 )
+TARGET_SHARDS = flags.DEFINE_string(
+    'target_shards',
+    None,
+    help=(
+        'Desired shards for each dimension in the output Zarr dataset, in the '
+        'same format as --target_chunks. If omitted, sharding is not used. '
+        'Shards should be multiples of corresponding chunk sizes. Only valid '
+        'with Zarr v3.'
+    ),
+)
+ZARR_FORMAT = flags.DEFINE_integer(
+    'zarr_format',
+    None,
+    help='Zarr format to use for the output.',
+)
 RUNNER = flags.DEFINE_string('runner', None, help='beam.runners.Runner')
 
 
@@ -48,7 +63,14 @@ def _parse_chunks_str(chunks_str: str) -> dict[str, int]:
 def main(argv):
   source_dataset, source_chunks = xbeam.open_zarr(INPUT_PATH.value)
   template = xbeam.make_template(source_dataset)
-  target_chunks = dict(source_chunks, **_parse_chunks_str(TARGET_CHUNKS.value))
+
+  target_chunks = source_chunks | _parse_chunks_str(TARGET_CHUNKS.value)
+
+  if TARGET_SHARDS.value is not None:
+    target_shards = source_chunks | _parse_chunks_str(TARGET_SHARDS.value)
+  else:
+    target_shards = None
+
   itemsize = max(variable.dtype.itemsize for variable in template.values())
 
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
@@ -58,10 +80,16 @@ def main(argv):
         | xbeam.Rechunk(  # pytype: disable=wrong-arg-types
             source_dataset.sizes,
             source_chunks,
-            target_chunks,
+            target_chunks if target_shards is None else target_shards,
             itemsize=itemsize,
         )
-        | xbeam.ChunksToZarr(OUTPUT_PATH.value, template, target_chunks)
+        | xbeam.ChunksToZarr(
+            OUTPUT_PATH.value,
+            template,
+            zarr_chunks=target_chunks,
+            zarr_shards=target_shards,
+            zarr_format=ZARR_FORMAT.value,
+        )
     )
 
 

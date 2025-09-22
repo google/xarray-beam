@@ -136,11 +136,14 @@ class Key:
     self.__init__(*state)
 
 
+K = TypeVar("K")
+
+
 def offsets_to_slices(
-    offsets: Mapping[str, int],
-    sizes: Mapping[str, int],
-    base: Mapping[str, int] | None = None,
-) -> dict[str, slice]:
+    offsets: Mapping[K, int],
+    sizes: Mapping[K, int],
+    base: Mapping[K, int] | None = None,
+) -> dict[K, slice]:
   """Convert offsets into slices with an optional base offset.
 
   Args:

@@ -19,7 +19,8 @@ from collections.abc import Mapping, Set
 import dataclasses
 import logging
 import os
-from typing import Any
+import pprint
+from typing import Any, TypeVar
 import warnings
 
 import apache_beam as beam
@@ -40,7 +41,7 @@ ReadableStore = str | zarr_storage.StoreLike | os.PathLike[str]
 WritableStore = str | zarr_storage.StoreLike | os.PathLike[str]
 
 
-def _infer_chunks(dataset: xarray.Dataset) -> Mapping[str, int]:
+def _infer_chunks(dataset: xarray.Dataset) -> dict[str, int]:
   """Infer chunks for an xarray.Dataset loaded from Zarr."""
   # The original Zarr array chunks (as tuples) are stored in the "encoding"
   # dictionary on each DataArray object.
@@ -65,7 +66,7 @@ def _infer_chunks(dataset: xarray.Dataset) -> Mapping[str, int]:
 
 def open_zarr(
     store: ReadableStore, **kwargs: Any
-) -> tuple[xarray.Dataset, Mapping[str, int]]:
+) -> tuple[xarray.Dataset, dict[str, int]]:
   """Returns a lazily indexable xarray.Dataset and chunks from a Zarr store.
 
   Only Zarr stores with the consistent chunking between non-indexed variables
@@ -79,7 +80,7 @@ def open_zarr(
 
   Returns:
     (dataset, chunks) pair, consisting of a Dataset with the contents of the
-    Zarr store and a mapping from dimensions to integer chunk sizes.
+    Zarr store and a dict mapping from dimensions to integer chunk sizes.
   """
   if 'chunks' in kwargs:
     raise TypeError(
@@ -277,26 +278,6 @@ def _verify_template_is_lazy(template: xarray.Dataset):
     )
 
 
-def _override_chunks(
-    dataset: xarray.Dataset,
-    chunks: Mapping[str, int],
-) -> xarray.Dataset:
-  """Override chunks on a Dataset, for already chunked variables only."""
-
-  def maybe_rechunk(variable):
-    if variable.chunks is None:
-      return variable
-    else:
-      relevant_chunks = {k: v for k, v in chunks.items() if k in variable.dims}
-      return variable.chunk(relevant_chunks)
-
-  data_vars = {
-      k: maybe_rechunk(dataset.variables[k]) for k in dataset.data_vars
-  }
-  coords = {k: maybe_rechunk(dataset.variables[k]) for k in dataset.coords}
-  return xarray.Dataset(data_vars, coords, dataset.attrs)
-
-
 def _dask_to_zarr_chunksize(dim: str, sizes: tuple[int, ...]) -> int:
   if not sizes:
     return 0
@@ -311,17 +292,130 @@ def _dask_to_zarr_chunksize(dim: str, sizes: tuple[int, ...]) -> int:
   return sizes[0]
 
 
-def _infer_zarr_chunks(dataset: xarray.Dataset) -> dict[str, int]:
+def _zarr_from_dask_chunks(dataset: xarray.Dataset) -> dict[str, int]:
   return {  # pytype: disable=bad-return-type
       dim: _dask_to_zarr_chunksize(dim, sizes)  # pytype: disable=wrong-arg-types
       for dim, sizes in dataset.chunks.items()
   }
 
 
+def _check_valid_encoding(
+    encoding: Mapping[str, Any], template: xarray.Dataset
+) -> None:
+  """Check that an encoding is valid for the given template."""
+  for k in encoding:
+    if k not in template.variables:
+      raise ValueError(f'encoding contains key not present in template: {k!r}')
+    if 'chunks' in encoding[k] or 'shards' in encoding[k]:
+      raise ValueError(
+          f"encoding for {k!r} includes 'chunks' or 'shards', which must be "
+          f'specified via zarr_chunks or zarr_shards: {encoding[k]}'
+      )
+
+
+def _finalize_chunks(
+    dataset: xarray.Dataset, chunks: Mapping[str, int]
+) -> dict[str, int]:
+  """Finalize missing chunk sizes from dataset dimension sizes."""
+  finalized_chunks = {}
+  for dim, size in dataset.sizes.items():
+    assert isinstance(dim, str)
+    c = chunks.get(dim, size)
+    finalized_chunks[dim] = c if c != -1 else size
+  return finalized_chunks
+
+
+def _finalize_setup_zarr_args(
+    template: xarray.Dataset,
+    chunks: Mapping[str, int] | None,
+    shards: Mapping[str, int] | None,
+) -> tuple[xarray.Dataset, dict[str, int], dict[str, int] | None]:
+  """Validate and finalize setup_zarr() arguments."""
+  _verify_template_is_lazy(template)
+  if chunks is None:
+    chunks = _zarr_from_dask_chunks(template)
+  template = _make_template_from_chunked(template)
+  chunks = _finalize_chunks(template, chunks)
+  if shards is not None:
+    shards = _finalize_chunks(template, chunks | shards)
+    if not all(shards[k] % chunks[k] == 0 for k in chunks):
+      # raise a better error message than the user would see from zarr-python
+      raise ValueError(
+          'shard sizes are not all evenly divisible by chunk sizes: '
+          f'{shards=}, {chunks=}'
+      )
+  return template, chunks, shards
+
+
+def _get_chunk_and_shard_encoding(
+    template: xarray.Dataset,
+    zarr_chunks: Mapping[str, int],
+    zarr_shards: Mapping[str, int] | None = None,
+) -> dict[str, dict[str, tuple[int, ...]]]:
+  """Return chunk and shard encodings for a Dataset."""
+  encoding = {}
+  for var_name in _chunked_vars(template):
+    assert isinstance(var_name, str)
+    variable = template.variables[var_name]
+    chunks = tuple(zarr_chunks[dim] for dim in variable.dims)
+    encoding[var_name] = {'chunks': chunks}
+    if zarr_shards is not None:
+      encoding[var_name]['shards'] = tuple(
+          zarr_shards[dim] for dim in variable.dims
+      )
+  return encoding
+
+
+def _setup_zarr(
+    template: xarray.Dataset,
+    store: WritableStore,
+    zarr_chunks: Mapping[str, int] | None = None,
+    zarr_shards: Mapping[str, int] | None = None,
+    zarr_format: int | None = None,
+    encoding: Mapping[str, Any] | None = None,
+) -> None:
+  """setup_zarr() without finalizing args."""
+  if encoding is None:
+    encoding = {}
+  else:
+    _check_valid_encoding(encoding, template)
+
+  template = _make_template_from_chunked(template)
+
+  # inconsistent chunks in encoding can lead to spurious failures in xarray:
+  # https://github.com/pydata/xarray/issues/5219
+  for var in template.variables.values():
+    if 'chunks' in var.encoding:
+      del var.encoding['chunks']
+
+  chunk_encoding = _get_chunk_and_shard_encoding(
+      template, zarr_chunks, zarr_shards
+  )
+  encoding = {
+      k: encoding.get(k, {}) | chunk_encoding.get(k, {})
+      for k in template.variables
+  }
+  encoding_str = pprint.pformat(encoding, sort_dicts=False)
+
+  logging.info(
+      f'writing Zarr metadata for template:\n{template}\n'
+      f'encoding={encoding_str}'
+  )
+  template.to_zarr(
+      store,
+      compute=False,
+      consolidated=True,
+      mode='w',
+      zarr_format=zarr_format,
+      encoding=encoding,
+  )
+
+
 def setup_zarr(
     template: xarray.Dataset,
     store: WritableStore,
     zarr_chunks: Mapping[str, int] | None = None,
+    zarr_shards: Mapping[str, int] | None = None,
     zarr_format: int | None = None,
     encoding: Mapping[str, Any] | None = None,
 ) -> None:
@@ -336,31 +430,24 @@ def setup_zarr(
       without array values.
     store: a string corresponding to a Zarr path or an existing Zarr store.
     zarr_chunks: chunking scheme to use for Zarr. If set, overrides the chunking
-      scheme on already chunked arrays in template.
+      scheme on already chunked arrays in template. Chunks of -1 use the full
+      dimension size from the dataset, like dask.array.
+    zarr_shards: optional sharding scheme to use for Zarr. Only valid if using
+      zarr_format=3. Shards of -1 use the full dimension size from the dataset,
+      like dask.array. Unspecified shard sizes default to chunk sizes.
     zarr_format: The desired zarr format to target (currently 2 or 3). The
       default of None will attempt to determine the zarr version from store when
       possible, otherwise defaulting to the default version used by the
-      zarr-python library installed. encoding : Nested dictionary with variable
-      names as keys and dictionaries of variable specific encodings as values,
-      e.g., ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
+      zarr-python library installed.
+    encoding: Nested dictionary with variable names as keys and dictionaries of
+      variable specific encodings as values, e.g.,
+      ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
   """
-  if zarr_chunks is not None:
-    template = _override_chunks(template, zarr_chunks)
-  _verify_template_is_lazy(template)
-  # inconsistent chunks in encoding can lead to spurious failures in xarray:
-  # https://github.com/pydata/xarray/issues/5219
-  template2 = template.copy(deep=False)
-  for var in template2.variables.values():
-    if 'chunks' in var.encoding:
-      del var.encoding['chunks']
-  logging.info(f'writing Zarr metadata for template:\n{template}')
-  template2.to_zarr(
-      store,
-      compute=False,
-      consolidated=True,
-      mode='w',
-      zarr_format=zarr_format,
-      encoding=encoding,
+  template, zarr_chunks, zarr_shards = _finalize_setup_zarr_args(
+      template, zarr_chunks, zarr_shards
+  )
+  _setup_zarr(
+      template, store, zarr_chunks, zarr_shards, zarr_format, encoding
   )
 
 
@@ -369,6 +456,7 @@ def validate_zarr_chunk(
     chunk: xarray.Dataset,
     template: xarray.Dataset,
     zarr_chunks: Mapping[str, int] | None = None,
+    zarr_shards: Mapping[str, int] | None = None,
 ) -> None:
   """Check a chunk for consistency against the given template.
 
@@ -382,6 +470,8 @@ def validate_zarr_chunk(
       without array values.
     zarr_chunks: chunking scheme to use for Zarr. If set, overrides the chunking
       scheme on already chunked arrays in template.
+    zarr_shards: optional sharding scheme to use for Zarr. If set, checked
+      instead of zarr_chunks to verify that a full write is being done.
   """
   unexpected_indexes = [k for k in chunk.indexes if k not in template.indexes]
   if unexpected_indexes:
@@ -390,8 +480,7 @@ def validate_zarr_chunk(
         f'{unexpected_indexes}'
     )
 
-  # Immutable dicts not considered a Mapping type which method expects.
-  region = core.offsets_to_slices(key.offsets, chunk.sizes)  # pytype: disable=wrong-arg-types
+  region = core.offsets_to_slices(key.offsets, chunk.sizes)
   for dim, full_index in template.indexes.items():
     if dim in chunk.indexes:
       expected_index = full_index[region[dim]]
@@ -402,25 +491,31 @@ def validate_zarr_chunk(
             f'{expected_index}\nvs.\n{actual_index}\n{key=}.'
         )
 
-  if zarr_chunks is None:
-    zarr_chunks = {k: v[0] for k, v in template.chunks.items()}
+  expected_chunks = zarr_shards if zarr_shards is not None else zarr_chunks
+  expected_name = 'shards' if zarr_shards is not None else 'chunks'
+  if expected_chunks is None:
+    return
   for dim, offset in key.offsets.items():
-    if dim not in zarr_chunks:
+    expected_chunksize = expected_chunks.get(dim)
+    if expected_chunksize is None:
       continue
-    if offset % zarr_chunks[dim]:
+    if expected_chunksize == -1:
+      expected_chunksize = template.sizes[dim]
+    if offset % expected_chunksize:
       raise ValueError(
           f'chunk offset {offset} along dimension {dim!r} is not a multiple of '
-          f'zarr chunks {zarr_chunks}'
+          f'zarr {expected_name} {expected_chunks}'
       )
     if (
-        chunk.sizes[dim] % zarr_chunks[dim]
+        chunk.sizes[dim] % expected_chunksize
         and offset + chunk.sizes[dim] != template.sizes[dim]
     ):
       raise ValueError(
-          f'chunk is smaller than zarr chunks {zarr_chunks} along at least one '
-          'dimension, which can lead to a race condition that results in '
-          'incomplete writes. Use ConsolidateChunks() or Rechunk() to ensure '
-          'appropriate chunk sizes before feeding data into ChunksToZarr(). '
+          f'chunk is smaller than zarr {expected_name} {expected_chunks} along '
+          'at least one dimension, which can lead to a race condition that '
+          'results in incomplete writes. Use ConsolidateChunks() or Rechunk() '
+          'to ensure appropriate chunk sizes before feeding data into '
+          'ChunksToZarr().'
           f'\nkey={key}\nchunk={chunk}'
       )
 
@@ -434,8 +529,6 @@ def write_chunk_to_zarr(
     chunk: xarray.Dataset,
     store: WritableStore,
     template: xarray.Dataset,
-    zarr_format: int | None = None,
-    encoding: Mapping[str, Any] | None = None,
 ) -> None:
   """Write a single Dataset chunk to Zarr.
 
@@ -448,20 +541,12 @@ def write_chunk_to_zarr(
       by `xarray_beam.make_template`). One or more variables are expected to be
       "chunked" with Dask, and will only have their metadata written to Zarr
       without array values.
-    zarr_format: The desired zarr format to target (currently 2 or 3). The
-      default of None will attempt to determine the zarr version from store when
-      possible, otherwise defaulting to the default version used by the
-      zarr-python library installed. encoding : Nested dictionary with variable
-      names as keys and dictionaries of variable specific encodings as values,
-      e.g., ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
   """
   already_written = [
       k for k in chunk.variables if k in _unchunked_vars(template)
   ]
   writable_chunk = chunk.drop_vars(already_written)
-
-  # Immutable dicts not considered a Mapping type which method expects.
-  region = core.offsets_to_slices(key.offsets, writable_chunk.sizes)  # pytype: disable=wrong-arg-types
+  region = core.offsets_to_slices(key.offsets, writable_chunk.sizes)
 
   # Ensure the arrays in writable_chunk are each stored in a single dask chunk.
   writable_chunk = writable_chunk.compute().chunk()
@@ -473,7 +558,7 @@ def write_chunk_to_zarr(
         region=region,
         compute=False,
         consolidated=True,
-        zarr_format=zarr_format,
+        mode='r+',
     )
     future.compute(num_workers=len(writable_chunk))
   except Exception as e:
@@ -491,13 +576,26 @@ class ChunksToZarr(beam.PTransform):
       template: xarray.Dataset | beam.pvalue.AsSingleton | None = None,
       zarr_chunks: Mapping[str, int] | None = None,
       *,
+      zarr_shards: Mapping[str, int] | None = None,
+      zarr_format: int | None = None,
       num_threads: int | None = None,
       needs_setup: bool = True,
-      zarr_format: int | None = None,
       encoding: Mapping[str, Any] | None = None,
   ):
     # pyformat: disable
     """Initialize ChunksToZarr.
+
+    Note on chunking and sharding:
+      The expected chunking in PCollections fed into ChunksToZarr depends on
+      whether or not use you Zarr v3's sharding feature, to group multiple
+      "chunks" into "shards" that are stored in individual files. Sharding is
+      optional. The default behavior of no sharding (one chunk per shard) is
+      equivalent to setting chunks and shards to the same value.
+
+      Zarr supports partial _reads_ of chunks from a shard, but shards must be
+      written in their entirety. This means that if you use sharding (by setting
+      ``zarr_shards``), PCollections to write with ChunksToZarr should be
+      chunked like ``zarr_shards``.
 
     Args:
       store: a string corresponding to a Zarr path or an existing Zarr store.
@@ -521,7 +619,16 @@ class ChunksToZarr(beam.PTransform):
         writing corrupted data Zarr stores, particularly when they contain many
         variables. It can also be quite slow for large datasets.
       zarr_chunks: chunking scheme to use for Zarr. If set, overrides the
-        chunking scheme on already chunked arrays in template.
+        chunking scheme on already chunked arrays in template. Chunks of -1 use
+        the full dimension size from the dataset, like dask.array.
+      zarr_shards: optional sharding scheme to use for Zarr. Only valid if using
+        zarr_format=3. Shards of -1 use the full dimension size from the
+        dataset, like dask.array. Unspecified shard sizes default to chunk
+        sizes.
+      zarr_format: The desired zarr format to target (currently 2 or 3). The
+        default of None will attempt to determine the zarr version from store
+        when possible, otherwise defaulting to the default version used by the
+        zarr-python library installed.
       num_threads: the number of Dataset chunks to write in parallel per worker.
         More threads can increase throughput, but also increases memory usage
         and makes it harder for Beam runners to shard work. Note that each
@@ -529,21 +636,22 @@ class ChunksToZarr(beam.PTransform):
         useful for Datasets with a small number of variables.
       needs_setup: if False, then the Zarr store is already setup and does not
         need to be set up as part of this PTransform.
-      zarr_format: The desired zarr format to target (currently 2 or 3). The
-        default of None will attempt to determine the zarr version from store
-        when possible, otherwise defaulting to the default version used by the
-        zarr-python library installed.
       encoding : Nested dictionary with variable names as keys and dictionaries
         of variable specific encodings as values, e.g.,
         ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
     """
     # pyformat: enable
+
     if isinstance(template, xarray.Dataset):
+      # Finalize zarr_chunks and zarr_shards, so validate_zarr_chunk() can
+      # do more checks.
+      template, zarr_chunks, zarr_shards = _finalize_setup_zarr_args(
+          template, zarr_chunks, zarr_shards
+      )
       if needs_setup:
-        setup_zarr(template, store, zarr_chunks, zarr_format, encoding)
-      if zarr_chunks is None:
-        zarr_chunks = _infer_zarr_chunks(template)
-      template = _make_template_from_chunked(template)
+        _setup_zarr(
+            template, store, zarr_chunks, zarr_shards, zarr_format, encoding
+        )
     elif isinstance(template, beam.pvalue.AsSingleton):
       if not needs_setup:
         raise ValueError(
@@ -570,6 +678,7 @@ class ChunksToZarr(beam.PTransform):
     self.store = store
     self.template = template
     self.zarr_chunks = zarr_chunks
+    self.zarr_shards = zarr_shards
     self.num_threads = num_threads
     self.zarr_format = zarr_format
     self.encoding = encoding
@@ -579,14 +688,14 @@ class ChunksToZarr(beam.PTransform):
     # must have defaults for MapTuple". Beam should probably be happy with a
     # keyword-only argument, too, but it doesn't like that yet.
     assert template is not None
-    validate_zarr_chunk(key, chunk, template, self.zarr_chunks)
+    validate_zarr_chunk(
+        key, chunk, template, self.zarr_chunks, self.zarr_shards
+    )
     return key, chunk
 
   def _write_chunk_to_zarr(self, key, chunk, template=None):
     assert template is not None
-    return write_chunk_to_zarr(
-        key, chunk, self.store, template, self.zarr_format, self.encoding
-    )
+    return write_chunk_to_zarr(key, chunk, self.store, template)
 
   def expand(self, pcoll):
     if isinstance(self.template, xarray.Dataset):
@@ -607,6 +716,7 @@ class ChunksToZarr(beam.PTransform):
               setup_zarr,
               self.store,
               self.zarr_chunks,
+              self.zarr_shards,
               self.zarr_format,
               self.encoding,
           )
