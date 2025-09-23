@@ -52,4 +52,4 @@ from xarray_beam._src.zarr import (
     DatasetToZarr,
 )
 
-__version__ = '0.9.2'  # automatically synchronized to pyproject.toml
+__version__ = '0.9.3'  # automatically synchronized to pyproject.toml
