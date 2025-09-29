@@ -246,6 +246,58 @@ class Dataset:
     )
     return type(self)(template, chunks, self.split_vars, ptransform)
 
+  # rechunking methods
+
+  def rechunk(
+      self,
+      chunks: dict[str, int],
+      min_mem: int | None = None,
+      max_mem: int = 2**30,
+  ) -> Dataset:
+    """Rechunk this Dataset.
+
+    Args:
+      chunks: new chunk sizes, as a dict mapping from dimension name to chunk
+        size. -1 is interpreted as a "full chunk".
+      min_mem: optional minimum memory usage for rechunking.
+      max_mem: optional maximum memory usage for rechunking.
+
+    Returns:
+      New Dataset with updated chunks.
+    """
+    # TODO(shoyer): support human readable strings for chunksizes like dask,
+    # e.g., chunks={"time": "10 MB"}.
+    chunks = rechunk.normalize_chunks(chunks, self.sizes)  # pytype: disable=wrong-arg-types
+    if self.split_vars:
+      itemsize = max(v.dtype.itemsize for v in self.template.values())
+    else:
+      itemsize = sum(v.dtype.itemsize for v in self.template.values())
+    rechunk_transform = rechunk.Rechunk(
+        self.sizes,
+        self.chunks,
+        chunks,
+        itemsize=itemsize,
+        min_mem=min_mem,
+        max_mem=max_mem,
+    )
+    label = _get_label('rechunk')
+    ptransform = self.ptransform | label >> rechunk_transform
+    return type(self)(self.template, chunks, self.split_vars, ptransform)
+
+  def split_variables(self) -> Dataset:
+    """Split variables in this Dataset into separate chunks."""
+    split_vars = True
+    label = _get_label('split_vars')
+    ptransform = self.ptransform | label >> rechunk.SplitVariables()
+    return type(self)(self.template, self.chunks, split_vars, ptransform)
+
+  def consolidate_variables(self) -> Dataset:
+    """Consolidate variables in this Dataset into a single chunk."""
+    split_vars = False
+    label = _get_label('consolidate_vars')
+    ptransform = self.ptransform | label >> rechunk.ConsolidateVariables()
+    return type(self)(self.template, self.chunks, split_vars, ptransform)
+
   # TODO(shoyer): implement merge, rename, mean, etc
 
   # thin wrappers around xarray methods

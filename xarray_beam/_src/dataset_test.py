@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import re
-import textwrap
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -185,10 +184,10 @@ class MapBlocksTest(test_util.TestCase):
     source = xarray.Dataset({'foo': ('x', np.arange(10))})
     source_ds = xbeam.Dataset.from_xarray(source, {'x': 5})
     mapped_ds = source_ds.map_blocks(
-        lambda ds: ds.assign(bar=2*ds.foo.expand_dims('y'))
+        lambda ds: ds.assign(bar=2 * ds.foo.expand_dims('y'))
     )
     self.assertEqual(mapped_ds.chunks, {'x': 5, 'y': 1})
-    expected = source.assign(bar=2*source.foo.expand_dims('y'))
+    expected = source.assign(bar=2 * source.foo.expand_dims('y'))
     actual = mapped_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, expected)
 
@@ -237,6 +236,62 @@ class MapBlocksTest(test_util.TestCase):
     func = lambda ds: ds.compute()  # something non-lazy
     mapped_ds = source_ds.map_blocks(func, template=source)
     actual = mapped_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(actual, source)
+
+
+class RechunkingTest(test_util.TestCase):
+
+  def test_split_variables(self):
+    source = xarray.Dataset(
+        {'foo': ('x', np.arange(10)), 'bar': ('x', np.arange(10))}
+    )
+    beam_ds = xbeam.Dataset.from_xarray(source, {'x': 5}, split_vars=False)
+    self.assertFalse(beam_ds.split_vars)
+    split_ds = beam_ds.split_variables()
+    self.assertTrue(split_ds.split_vars)
+    self.assertRegex(
+        split_ds.ptransform.label, r'^from_xarray_\d+\|split_vars_\d+$'
+    )
+    actual = split_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(actual, source)
+
+  def test_consolidate_variables(self):
+    source = xarray.Dataset(
+        {'foo': ('x', np.arange(10)), 'bar': ('x', np.arange(10))}
+    )
+    beam_ds = xbeam.Dataset.from_xarray(source, {'x': 5}, split_vars=True)
+    self.assertTrue(beam_ds.split_vars)
+    consolidated_ds = beam_ds.consolidate_variables()
+    self.assertFalse(consolidated_ds.split_vars)
+    self.assertRegex(
+        consolidated_ds.ptransform.label,
+        r'^from_xarray_\d+\|consolidate_vars_\d+$',
+    )
+    actual = consolidated_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(actual, source)
+
+  def test_rechunk(self):
+    source_chunks = {'x': 5, 'y': 1}
+    target_chunks = {'x': 2, 'y': -1}
+    source = xarray.Dataset({'foo': (('x', 'y'), np.arange(40).reshape(10, 4))})
+    beam_ds = xbeam.Dataset.from_xarray(source, source_chunks)
+    rechunked_ds = beam_ds.rechunk(target_chunks)
+
+    self.assertEqual(rechunked_ds.chunks, {'x': 2, 'y': 4})
+    actual = rechunked_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(actual, source)
+
+  def test_rechunk_split_vars(self):
+    source = xarray.Dataset({
+        'foo': (('x', 'y'), np.arange(20).reshape(10, 2)),
+        'bar': ('x', np.arange(10)),
+    })
+    beam_ds = xbeam.Dataset.from_xarray(
+        source, {'x': 5, 'y': 2}, split_vars=True
+    )
+    rechunked_ds = beam_ds.rechunk({'x': 2, 'y': 1})
+    self.assertEqual(rechunked_ds.chunks, {'x': 2, 'y': 1})
+    actual = rechunked_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, source)
 
 
