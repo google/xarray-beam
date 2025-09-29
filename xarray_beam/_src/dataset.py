@@ -332,6 +332,18 @@ class Dataset:
     ptransform = self.ptransform | label >> rechunk.ConsolidateVariables()
     return type(self)(self.template, self.chunks, split_vars, ptransform)
 
+  _head = _whole_dataset_method('head')
+
+  def head(self, **indexers_kwargs: int) -> Dataset:
+    """Return a Dataset with the first N elements of each dimension."""
+    if not isinstance(self.ptransform, core.DatasetToChunks):
+      raise ValueError(
+          'head() is only supported on untransformed datasets, with '
+          'ptransform=DatasetToChunks. This dataset has '
+          f'ptransform={self.ptransform}'
+      )
+    return self._head(**indexers_kwargs)
+
   # TODO(shoyer): implement merge, rename, mean, etc
 
   # thin wrappers around xarray methods

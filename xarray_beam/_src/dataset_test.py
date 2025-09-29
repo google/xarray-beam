@@ -179,6 +179,25 @@ class DatasetTest(test_util.TestCase):
       actual = result.collect_with_direct_runner()
       xarray.testing.assert_identical(expected, actual)
 
+  def test_head(self):
+    ds = xarray.Dataset({'foo': ('x', np.arange(10))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5})
+
+    head_ds = beam_ds.head(x=2)
+    self.assertRegex(head_ds.ptransform.label, r'^from_xarray_\d+|head_\d+$')
+    expected = ds.head(x=2)
+    actual = head_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(expected, actual)
+
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape(
+            'head() is only supported on untransformed datasets, with '
+            'ptransform=DatasetToChunks. This dataset has ptransform='
+        ),
+    ):
+      beam_ds.map_blocks(lambda x: x).head(x=2)
+
   @parameterized.named_parameters(
       dict(
           testcase_name='no_chunking',
