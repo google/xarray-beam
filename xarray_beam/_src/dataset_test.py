@@ -357,5 +357,76 @@ class RechunkingTest(test_util.TestCase):
     xarray.testing.assert_identical(actual, source)
 
 
+class EndToEndTest(test_util.TestCase):
+
+  def test_docstring_example(self):
+    input_path = self.create_tempdir('source').full_path
+    output_path = self.create_tempdir('output').full_path
+
+    source_ds = test_util.dummy_era5_surface_dataset(times=365, freq='24H')
+    source_ds.chunk({'time': 90}).to_zarr(input_path)
+
+    transform = (
+        xbeam.Dataset.from_zarr(input_path)
+        .rechunk({'time': -1, 'latitude': 10, 'longitude': 10})
+        .map_blocks(lambda x: x.median('time'))
+        .to_zarr(output_path)
+    )
+    test_util.EagerPipeline() | transform
+
+    expected = source_ds.median('time')
+    actual, chunks = xbeam.open_zarr(output_path)
+    xarray.testing.assert_identical(expected, actual)
+    self.assertEqual(chunks, {'latitude': 10, 'longitude': 10})
+
+  def test_climatology(self):
+    input_path = self.create_tempdir('source').full_path
+    output_path = self.create_tempdir('output').full_path
+
+    source_ds = test_util.dummy_era5_surface_dataset(times=365, freq='24H')
+    source_ds.chunk({'time': 90}).to_zarr(input_path)
+
+    transform = (
+        xbeam.Dataset.from_zarr(input_path)
+        .rechunk({'time': -1, 'latitude': 10, 'longitude': 10})
+        .map_blocks(lambda x: x.groupby('time.month').mean())
+        .to_zarr(output_path)
+    )
+    test_util.EagerPipeline() | transform
+
+    expected = source_ds.groupby('time.month').mean()
+    actual, chunks = xbeam.open_zarr(output_path)
+    xarray.testing.assert_identical(expected, actual)
+    self.assertEqual(chunks, {'month': 12, 'latitude': 10, 'longitude': 10})
+
+  def test_resample(self):
+    input_path = self.create_tempdir('source').full_path
+    output_path = self.create_tempdir('output').full_path
+
+    source_ds = test_util.dummy_era5_surface_dataset(
+        latitudes=73, longitudes=144, times=365, freq='24H'
+    )
+    source_ds.chunk({'time': 90}).to_zarr(input_path)
+
+    transform = (
+        xbeam.Dataset.from_zarr(input_path)
+        .rechunk({'time': -1, 'latitude': 10, 'longitude': 10})
+        .map_blocks(lambda x: x.resample(time='10D').mean())
+        .rechunk({'time': 20, 'latitude': -1, 'longitude': -1})
+        .to_zarr(
+            output_path,
+            zarr_chunks={'time': 10, 'latitude': -1, 'longitude': -1},
+            zarr_shards={'time': 20, 'latitude': -1, 'longitude': -1},
+            zarr_format=3,
+        )
+    )
+    test_util.EagerPipeline() | transform
+
+    expected = source_ds.resample(time='10D').mean()
+    actual, chunks = xbeam.open_zarr(output_path)
+    xarray.testing.assert_identical(expected, actual)
+    self.assertEqual(chunks, {'time': 10, 'latitude': 73, 'longitude': 144})
+
+
 if __name__ == '__main__':
   absltest.main()
