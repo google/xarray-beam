@@ -81,15 +81,77 @@ class DatasetTest(test_util.TestCase):
 
   def test_to_zarr(self):
     temp_dir = self.create_tempdir().full_path
-    ds = xarray.Dataset({'foo': ('x', np.arange(10))})
-    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5})
-    to_zarr = beam_ds.to_zarr(temp_dir)
+    ds = xarray.Dataset({'foo': ('x', np.arange(12))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 6})
+
+    with self.subTest('same_chunks'):
+      to_zarr = beam_ds.to_zarr(temp_dir)
+      self.assertRegex(to_zarr.label, r'^from_xarray_\d+|to_zarr_\d+$')
+      with beam.Pipeline() as p:
+        p |= to_zarr
+      opened, chunks = xbeam.open_zarr(temp_dir)
+      xarray.testing.assert_identical(ds, opened)
+      self.assertEqual(chunks, {'x': 6})
+
+    with self.subTest('smaller_chunks'):
+      temp_dir = self.create_tempdir().full_path
+      with beam.Pipeline() as p:
+        p |= beam_ds.to_zarr(temp_dir, zarr_chunks={'x': 3})
+      opened, chunks = xbeam.open_zarr(temp_dir)
+      xarray.testing.assert_identical(ds, opened)
+      self.assertEqual(chunks, {'x': 3})
+
+    with self.subTest('larger_chunks'):
+      with self.assertRaisesWithLiteralMatch(
+          ValueError,
+          "cannot write a dataset with chunks {'x': 6} to Zarr with chunks "
+          "{'x': 9}, which do not divide evenly into chunks",
+      ):
+        beam_ds.to_zarr(temp_dir, zarr_chunks={'x': 9})
+
+    with self.subTest('shards_without_chunks'):
+      with self.assertRaisesWithLiteralMatch(
+          ValueError, 'cannot supply zarr_shards without zarr_chunks'
+      ):
+        beam_ds.to_zarr(temp_dir, zarr_shards={'x': -1})
+
+  def test_to_zarr_shards(self):
+    temp_dir = self.create_tempdir().full_path
+    ds = xarray.Dataset({'foo': ('x', np.arange(12))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 6})
+
+    with self.subTest('same_shards_as_chunks'):
+      with beam.Pipeline() as p:
+        p |= beam_ds.to_zarr(
+            temp_dir, zarr_chunks={'x': 3}, zarr_shards={'x': 6}, zarr_format=3
+        )
+      opened, chunks = xbeam.open_zarr(temp_dir)
+      xarray.testing.assert_identical(ds, opened)
+      self.assertEqual(chunks, {'x': 3})
+      self.assertEqual(opened['foo'].encoding['shards'], (6,))
+
+    with self.subTest('larger_shards'):
+      with self.assertRaisesWithLiteralMatch(
+          ValueError,
+          "cannot write a dataset with chunks {'x': 6} to Zarr with shards "
+          "{'x': 9}, which do not divide evenly into shards",
+      ):
+        beam_ds.to_zarr(
+            temp_dir, zarr_chunks={'x': 3}, zarr_shards={'x': 9}, zarr_format=3
+        )
+
+  def test_to_zarr_default_chunks(self):
+    temp_dir = self.create_tempdir().full_path
+    ds = xarray.Dataset({'foo': (('x', 'y'), np.arange(20).reshape(10, 2))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 4})
+    to_zarr = beam_ds.to_zarr(temp_dir, zarr_chunks={'x': 2})
 
     self.assertRegex(to_zarr.label, r'^from_xarray_\d+|to_zarr_\d+$')
     with beam.Pipeline() as p:
       p |= to_zarr
-    opened = xarray.open_zarr(temp_dir).compute()
+    opened, chunks = xbeam.open_zarr(temp_dir)
     xarray.testing.assert_identical(ds, opened)
+    self.assertEqual(chunks, {'x': 2, 'y': 2})
 
   @parameterized.named_parameters(
       dict(testcase_name='getitem', call=lambda x: x[['foo']]),

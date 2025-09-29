@@ -36,7 +36,7 @@ import itertools
 import operator
 import os.path
 import tempfile
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import apache_beam as beam
 import xarray
@@ -175,10 +175,44 @@ class Dataset:
     result.ptransform = _get_label('from_zarr') >> result.ptransform
     return result
 
-  def to_zarr(self, path: str) -> beam.PTransform:
+  def _check_shards_or_chunks(
+      self,
+      zarr_chunks: Mapping[str, int],
+      chunks_name: Literal['shards', 'chunks'],
+  ) -> None:
+    if any(self.chunks[k] % zarr_chunks[k] for k in self.chunks):
+      raise ValueError(
+          f'cannot write a dataset with chunks {self.chunks} to Zarr with '
+          f'{chunks_name} {zarr_chunks}, which do not divide evenly into '
+          f'{chunks_name}'
+      )
+
+  def to_zarr(
+      self,
+      path: str,
+      zarr_chunks: Mapping[str, int] | None = None,
+      zarr_shards: Mapping[str, int] | None = None,
+      zarr_format: int | None = None,
+  ) -> beam.PTransform:
     """Write to a Zarr file."""
+    if zarr_chunks is None:
+      if zarr_shards is not None:
+        raise ValueError('cannot supply zarr_shards without zarr_chunks')
+      zarr_chunks = {}
+
+    zarr_chunks = {**self.chunks, **zarr_chunks}
+    if zarr_shards is not None:
+      zarr_shards = {**self.chunks, **zarr_shards}
+      self._check_shards_or_chunks(zarr_shards, 'shards')
+    else:
+      self._check_shards_or_chunks(zarr_chunks, 'chunks')
+
     return self.ptransform | _get_label('to_zarr') >> zarr.ChunksToZarr(
-        path, self.template, self.chunks
+        path,
+        self.template,
+        zarr_chunks=zarr_chunks,
+        zarr_shards=zarr_shards,
+        zarr_format=zarr_format,
     )
 
   def collect_with_direct_runner(self) -> xarray.Dataset:
