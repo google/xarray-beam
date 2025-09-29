@@ -13,7 +13,7 @@
 # limitations under the License.
 """A high-level interface for Xarray-Beam datasets.
 
-Usage example (not fully implemented yet!):
+Usage example:
 
     import xarray_beam as xbeam
 
@@ -31,14 +31,98 @@ from __future__ import annotations
 import collections
 from collections.abc import Mapping
 import dataclasses
+import functools
 import itertools
+import operator
 import os.path
 import tempfile
+from typing import Any, Callable
 
 import apache_beam as beam
 import xarray
 from xarray_beam._src import core
+from xarray_beam._src import rechunk
 from xarray_beam._src import zarr
+
+
+def _infer_new_chunks(
+    old_sizes: Mapping[str, int],
+    old_chunks: Mapping[str, int],
+    new_sizes: Mapping[str, int],
+) -> Mapping[str, int]:
+  """Compute new chunks based on old and new sizes."""
+  new_chunks = {}
+  for dim, new_size in new_sizes.items():
+    assert isinstance(dim, str)
+
+    if dim not in old_sizes:
+      new_chunks[dim] = new_size
+    elif new_size == old_sizes[dim]:
+      new_chunks[dim] = old_chunks[dim]
+    else:
+      old_size = old_sizes[dim]
+      count, remainder = divmod(old_size, old_chunks[dim])
+      if remainder != 0:
+        raise ValueError(
+            f'cannot infer new chunks for dimension {dim!r} with changed size '
+            f'{old_size} -> {new_size}: existing chunks {old_chunks} do not '
+            f'evenly divide existing sizes {old_sizes}'
+        )
+      new_chunks[dim], remainder = divmod(new_size, count)
+      if remainder != 0:
+        raise ValueError(
+            f'cannot infer new chunks for dimension {dim!r} with changed size '
+            f'{old_size} -> {new_size}: the {count} chunks along this '
+            f'dimension do not evenly divide the new size {new_size}'
+        )
+
+  return new_chunks
+
+
+def _apply_to_each_chunk(
+    func: Callable[[xarray.Dataset], xarray.Dataset],
+    old_chunks: Mapping[str, int],
+    new_chunks: Mapping[str, int],
+    key: core.Key,
+    chunk: xarray.Dataset,
+) -> tuple[core.Key, xarray.Dataset]:
+  """Apply a function to each chunk."""
+  new_chunk = func(chunk)
+  new_offsets = {}
+  for dim in new_chunk.dims:
+    assert isinstance(dim, str)
+    new_offsets[dim] = (
+        key.offsets.get(dim, 0) // old_chunks.get(dim, 1) * new_chunks[dim]
+    )
+  new_vars = set(new_chunk) if key.vars is not None else None
+  new_key = core.Key(new_offsets, new_vars)
+  return new_key, new_chunk
+
+
+def _whole_dataset_method(method_name: str):
+  """Helper function for defining a method with a fast-path for lazy data."""
+
+  def method(self: Dataset, *args, **kwargs) -> Dataset:
+    func = operator.methodcaller(method_name, *args, **kwargs)
+    template = zarr.make_template(func(self.template))
+    chunks = {k: v for k, v in self.chunks.items() if k in template.dims}
+
+    label = _get_label(method_name)
+    if isinstance(self.ptransform, core.DatasetToChunks):
+      # Some transformations (e.g., indexing) can be applied much less
+      # expensively to xarray.Dataset objects rather than via Xarray-Beam. Try
+      # to preserve this option for downstream transformations if possible.
+      dataset = func(self.ptransform.dataset)
+      ptransform = label >> core.DatasetToChunks(
+          dataset, chunks, self.split_vars
+      )
+    else:
+      ptransform = self.ptransform | label >> beam.MapTuple(
+          functools.partial(_apply_to_each_chunk, func)
+      )
+    return Dataset(template, chunks, self.split_vars, ptransform)
+
+  return method
 
 
 class _CountNamer:
@@ -62,6 +146,9 @@ class Dataset:
   split_vars: bool
   ptransform: beam.PTransform
 
+  def __post_init__(self):
+    self.chunks = rechunk.normalize_chunks(self.chunks, self.sizes)
+
   @classmethod
   def from_xarray(
       cls,
@@ -71,10 +158,14 @@ class Dataset:
   ) -> Dataset:
     """Create an xarray_beam.Dataset from an xarray.Dataset."""
     template = zarr.make_template(source)
-    ptransform = _get_label('from_xarray') >> core.DatasetToChunks(
-        source, chunks, split_vars
-    )
+    ptransform = core.DatasetToChunks(source, chunks, split_vars)
+    ptransform.label = _get_label('from_xarray')
     return cls(template, dict(chunks), split_vars, ptransform)
+
+  @property
+  def sizes(self) -> Mapping[str, int]:
+    """Size of each dimension on this dataset."""
+    return self.template.sizes  # pytype: disable=bad-return-type
 
   @classmethod
   def from_zarr(cls, path: str, split_vars: bool = False) -> Dataset:
@@ -102,12 +193,64 @@ class Dataset:
         pipeline |= self.to_zarr(temp_path)
       return xarray.open_zarr(temp_path).compute()
 
-  # TODO(shoyer): implement map_blocks, rechunking, merge, rename, mean, etc
+  def map_blocks(
+      self,
+      /,
+      func,
+      *,
+      kwargs: dict[str, Any] | None = None,
+      template: xarray.Dataset | None = None,
+      chunks: Mapping[str, int] | None = None,
+  ) -> Dataset:
+    """Map a function over the chunks of this dataset.
 
-  @property
-  def sizes(self) -> dict[str, int]:
-    """Size of each dimension on this dataset."""
-    return dict(self.template.sizes)  # pytype: disable=bad-return-type
+    Args:
+      func: any function that does not change the size of dataset chunks, called
+        like `func(chunk, **kwargs)`, where `chunk` is an xarray.Dataset.
+      kwargs: passed on to func, unmodified.
+      template: new template for the resulting dataset. If not provided, an
+        attempt will be made to infer the template by applying `func` to the
+        existing template, which requires that `func` is implemented using dask
+        compatible operations.
+      chunks: new chunks sizes for the resulting dataset. If not provided, an
+        attempt will be made to infer the new chunks based on the existing
+        chunks, dimensions sizes and the new template.
+
+    Returns:
+      New Dataset with updated chunks.
+    """
+    if kwargs is not None:
+      func = functools.partial(func, **kwargs)
+
+    if template is None:
+      try:
+        template = func(self.template)
+      except ValueError as e:
+        raise ValueError(
+            'failed to lazily apply func() to the existing template. Consider '
+            'supplying template explicitly or modifying func() to support lazy '
+            'dask arrays.'
+        ) from e
+    template = zarr.make_template(template)  # ensure template is lazy
+
+    if chunks is None:
+      chunks = _infer_new_chunks(
+          old_sizes=self.sizes,
+          old_chunks=self.chunks,
+          new_sizes=template.sizes,
+      )  # pytype: disable=wrong-arg-types
+
+    label = _get_label('map_blocks')
+    ptransform = self.ptransform | label >> beam.MapTuple(
+        functools.partial(_apply_to_each_chunk, func, self.chunks, chunks)
+    )
+    return type(self)(template, chunks, self.split_vars, ptransform)
+
+  # TODO(shoyer): implement merge, rename, mean, etc
+
+  # thin wrappers around xarray methods
+  __getitem__ = _whole_dataset_method('__getitem__')
+  transpose = _whole_dataset_method('transpose')
 
   def pipe(self, func, *args, **kwargs):
     return func(*args, **kwargs)
@@ -117,6 +260,6 @@ class Dataset:
     chunks_str = ', '.join(f'{k}: {v}' for k, v in self.chunks.items())
     return (
         f'<xarray_beam.Dataset[{chunks_str}][split_vars={self.split_vars}]>'
-        + '\n'
+        + f'\nPTransform: {self.ptransform}\n'
         + '\n'.join(base.split('\n')[1:])
     )

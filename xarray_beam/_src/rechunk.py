@@ -44,19 +44,18 @@ def normalize_chunks(
     )
   result = {}
   for dim, size in dim_sizes.items():
-    if dim not in chunks:
-      result[dim] = size
+    if dim not in chunks or chunks[dim] == -1:
+      new_chunk_size = size
     elif isinstance(chunks[dim], tuple):
       unique_chunks = set(chunks[dim])
       if len(unique_chunks) != 1:
         raise ValueError(
             f'chunks for dimension {dim} are not constant: {unique_chunks}',
         )
-      (result[dim],) = unique_chunks
-    elif chunks[dim] == -1:
-      result[dim] = size
+      (new_chunk_size,) = unique_chunks
     else:
-      result[dim] = chunks[dim]
+      new_chunk_size = chunks[dim]
+    result[dim] = new_chunk_size
   return result
 
 
