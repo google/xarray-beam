@@ -257,12 +257,70 @@ class Dataset:
   def to_zarr(
       self,
       path: str,
+      *,
+      zarr_chunks_per_shard: Mapping[str, int] | None = None,
       zarr_chunks: Mapping[str, int] | None = None,
       zarr_shards: Mapping[str, int] | None = None,
       zarr_format: int | None = None,
   ) -> beam.PTransform:
-    """Write to a Zarr file."""
-    if zarr_chunks is None:
+    """Write this dataset to a Zarr file.
+
+    The extensive options for controlling chunking and sharding are intended for
+    power users:
+
+    * If you are happy with the existing chunk sizes of your dataset
+      and just want to write it to disk, you can omit all of them.
+    * Consider specifying only ``zarr_chunks_per_shard`` to allow for more
+      flexible efficient reading of data from disk. This allows for dividing
+      dataset chunks into much smaller Zarr chunks on disk, with each chunk
+      stored in a single Zarr shard.
+
+    Args:
+      path: path to write to.
+      zarr_chunks_per_shard: If provided, write this dataset into Zarr shards,
+        each with at most this many Zarr chunks per shard (requires Zarr v3).
+      zarr_chunks: Explicit chunk sizes to use for storing data in Zarr, as an
+        alternative to specifying ``zarr_chunks_per_shard``. Zarr chunk sizes
+        must evenly divide the existing chunk sizes of this dataset.
+      zarr_shards: Explicit shards to use for storing data in Zarr, which must
+        evenly divide the existing chunk sizes of this dataset, and be even
+        multiples of chunk sizes. Requires Zarr v3. By default, Zarr sharding is
+        not used unless ``zarr_chunks_per_shard`` is provided, in which case
+        Zarr shards default to the chunk sizes of this dataset.
+      zarr_format: optional integer specifying the explicit Zarr format to use.
+        Defaults to Zarr v3 if using shards, or the default format for your
+        installed version of Zarr.
+
+    Returns:
+      Beam PTransform that writes the dataset to a Zarr file.
+    """
+    if zarr_chunks_per_shard is not None:
+      if zarr_chunks is not None:
+        raise ValueError(
+            'cannot supply both zarr_chunks_per_shard and zarr_chunks'
+        )
+      if zarr_shards is None:
+        zarr_shards = {}
+      zarr_shards = {**self.chunks, **zarr_shards}
+      zarr_chunks = {}
+      for dim, existing_chunk_size in zarr_shards.items():
+        multiple = zarr_chunks_per_shard.get(dim)
+        if multiple is None:
+          raise ValueError(
+              f'cannot write a dataset with chunks {self.chunks} to Zarr with '
+              f'{zarr_chunks_per_shard=}, which does not contain a value for '
+              f'dimension {dim!r}'
+          )
+        zarr_chunks[dim], remainder = divmod(
+            existing_chunk_size, multiple
+        )
+        if remainder != 0:
+          raise ValueError(
+              f'cannot write a dataset with chunks {self.chunks} to Zarr with '
+              f'{zarr_chunks_per_shard=}, which do not evenly divide into '
+              'chunks'
+          )
+    elif zarr_chunks is None:
       if zarr_shards is not None:
         raise ValueError('cannot supply zarr_shards without zarr_chunks')
       zarr_chunks = {}
@@ -273,6 +331,9 @@ class Dataset:
       self._check_shards_or_chunks(zarr_shards, 'shards')
     else:
       self._check_shards_or_chunks(zarr_chunks, 'chunks')
+
+    if zarr_shards is not None and zarr_format is None:
+      zarr_format = 3  # required for shards
 
     return self.ptransform | _get_label('to_zarr') >> zarr.ChunksToZarr(
         path,
