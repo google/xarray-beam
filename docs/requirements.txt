@@ -1,9 +1,9 @@
 # doc requirements
+furo==2025.9.25
 Jinja2==3.1.6
 myst-nb==1.3.0
 myst-parser==4.0.1
 sphinx==8.2.3
-sphinx_rtd_theme==3.0.2
 scipy==1.16.2
 matplotlib==3.10.6
 

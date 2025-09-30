@@ -15,5 +15,6 @@ data-model.ipynb
 read-write.ipynb
 aggregation.ipynb
 rechunking.ipynb
+high-level.ipynb
 api.md
 ```

@@ -79,3 +79,27 @@
     split_variables
     in_memory_rechunk
 ```
+
+## High-level interface
+
+```{warning}
+The high-level interface is experimental and offers no backwards compatibility
+guarantees.
+```
+
+```{eval-rst}
+.. autosummary::
+    :toctree: _autosummary
+
+    Dataset
+    Dataset.from_xarray
+    Dataset.from_zarr
+    Dataset.to_zarr
+    Dataset.collect_with_direct_runner
+    Dataset.map_blocks
+    Dataset.rechunk
+    Dataset.split_variables
+    Dataset.consolidate_variables
+    Dataset.head
+    Dataset.pipe
+```

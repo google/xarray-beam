@@ -14,12 +14,15 @@
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
 
-# Print Python environment info for easier debugging on ReadTheDocs
-
+import inspect
+import operator
+import os
 import sys
 import subprocess
+
 import xarray_beam  # verify this works
 
+# Print Python environment info for easier debugging on ReadTheDocs
 print("python exec:", sys.executable)
 print("sys.path:", sys.path)
 print("pip environment:")
@@ -42,6 +45,7 @@ author = 'The Xarray-Beam authors'
 extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
+    'sphinx.ext.linkcode',
     'sphinx.ext.napoleon',
     'myst_nb',
 ]
@@ -63,7 +67,14 @@ intersphinx_mapping = {
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'furo'  # https://pradyunsg.me/furo/quickstart/
+
+html_theme_options = {
+    'source_repository': 'https://github.com/google/xarray-beam/',
+    'source_branch': 'main',
+    'source_directory': 'docs/',
+    'sidebar_hide_name': False,
+}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -81,3 +92,34 @@ nb_output_stderr = "remove-warn"
 
 # https://stackoverflow.com/a/66295922/809705
 autodoc_typehints = "description"
+
+
+# Customize code links via sphinx.ext.linkcode
+# Borrowed from JAX: https://github.com/google/jax/pull/20961
+
+
+def linkcode_resolve(domain, info):
+  if domain != 'py':
+    return None
+  if not info['module']:
+    return None
+  if not info['fullname']:
+    return None
+  try:
+    mod = sys.modules.get(info['module'])
+    obj = operator.attrgetter(info['fullname'])(mod)
+    if isinstance(obj, property):
+      obj = obj.fget
+    while hasattr(obj, '__wrapped__'):  # decorated functions
+      obj = obj.__wrapped__
+    filename = inspect.getsourcefile(obj)
+    source, linenum = inspect.getsourcelines(obj)
+    print(f'found source code for: {info}')
+  except Exception as e:
+    print(f'did not find source code for: {info}: {e}')
+    return None
+  filename = os.path.relpath(
+      filename, start=os.path.dirname(xarray_beam.__file__)
+  )
+  lines = f'#L{linenum}-L{linenum + len(source)}' if linenum else ''
+  return f'https://github.com/google/xarray-beam/blob/main/xarray_beam/{filename}{lines}'
