@@ -295,9 +295,8 @@ class Dataset:
   def map_blocks(
       self,
       /,
-      func,
+      func: Callable[[xarray.Dataset], xarray.Dataset],
       *,
-      kwargs: dict[str, Any] | None = None,
       template: xarray.Dataset | None = None,
       chunks: Mapping[str, int] | None = None,
   ) -> Dataset:
@@ -305,12 +304,11 @@ class Dataset:
 
     Args:
       func: any function that does not change the size of dataset chunks, called
-        like `func(chunk, **kwargs)`, where `chunk` is an xarray.Dataset.
-      kwargs: passed on to func, unmodified.
+        like ``func(chunk)``, where ``chunk`` is an xarray.Dataset.
       template: new template for the resulting dataset. If not provided, an
-        attempt will be made to infer the template by applying `func` to the
-        existing template, which requires that `func` is implemented using dask
-        compatible operations.
+        attempt will be made to infer the template by applying ``func`` to the
+        existing template, which requires that ``func`` is implemented using
+        dask compatible operations.
       chunks: new chunks sizes for the resulting dataset. If not provided, an
         attempt will be made to infer the new chunks based on the existing
         chunks, dimensions sizes and the new template.
@@ -318,9 +316,6 @@ class Dataset:
     Returns:
       New Dataset with updated chunks.
     """
-    if kwargs is not None:
-      func = functools.partial(func, **kwargs)
-
     if template is None:
       try:
         template = func(self.template)
