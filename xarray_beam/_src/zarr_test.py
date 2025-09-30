@@ -416,7 +416,7 @@ class DatasetToZarrTest(test_util.TestCase):
     temp_dir = self.create_tempdir().full_path
     with self.assertRaisesWithLiteralMatch(
         ValueError,
-        "shard sizes are not all evenly divisible by chunk sizes: "
+        'shard sizes are not all evenly divisible by chunk sizes: '
         "shards={'x': 1, 'y': 1}, chunks={'x': 2, 'y': 3}",
     ):
       xbeam.ChunksToZarr(
@@ -729,9 +729,9 @@ class DatasetToZarrTest(test_util.TestCase):
 
   def test_chunks_to_zarr_docs_demo(self):
     # verify that the ChunksToChunk demo from our docs works
-    data = np.random.RandomState(0).randn(2920//100, 25, 53)
+    data = np.random.RandomState(0).randn(2920 // 100, 25, 53)
     ds = xarray.Dataset({'temperature': (('time', 'lat', 'lon'), data)})
-    chunks = {'time': 1000//100, 'lat': 25, 'lon': 53}
+    chunks = {'time': 1000 // 100, 'lat': 25, 'lon': 53}
     temp_dir = self.create_tempdir().full_path
     (
         test_util.EagerPipeline()
@@ -742,6 +742,15 @@ class DatasetToZarrTest(test_util.TestCase):
     )
     result = xarray.open_zarr(temp_dir)
     xarray.testing.assert_identical(result, ds)
+
+  def test_chunks_to_zarr_scalar_variable(self):
+    dataset = xarray.Dataset({'foo': da.zeros(())})
+    temp_dir = self.create_tempdir().full_path
+    [(xbeam.Key({}), dataset.compute())] | xbeam.ChunksToZarr(
+        temp_dir, template=dataset
+    )
+    actual = xarray.open_zarr(temp_dir, consolidated=True)
+    xarray.testing.assert_identical(actual, dataset)
 
 
 if __name__ == '__main__':

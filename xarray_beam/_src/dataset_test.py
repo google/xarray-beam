@@ -530,5 +530,26 @@ class EndToEndTest(test_util.TestCase):
     self.assertEqual(chunks, {'time': 10, 'latitude': 73, 'longitude': 144})
 
 
+class MeanTest(test_util.TestCase):
+
+  @parameterized.named_parameters(
+      dict(testcase_name='x', dim='x', skipna=True, fanout=None),
+      dict(testcase_name='y', dim='y', skipna=True, fanout=None),
+      dict(testcase_name='two_dims', dim=['x', 'y'], skipna=True, fanout=None),
+      dict(testcase_name='all_dims', dim=None, skipna=True, fanout=None),
+      dict(testcase_name='skipna_false', dim='y', skipna=False, fanout=None),
+      dict(testcase_name='with_fanout', dim='y', skipna=True, fanout=2),
+  )
+  def test_mean(self, dim, skipna, fanout):
+    source_ds = xarray.Dataset(
+        {'foo': (('x', 'y'), np.array([[1, 2, np.nan], [4, np.nan, 6]]))}
+    )
+    beam_ds = xbeam.Dataset.from_xarray(source_ds, chunks={'x': 1})
+    actual = beam_ds.mean(dim=dim, skipna=skipna, fanout=fanout)
+    expected = source_ds.mean(dim=dim, skipna=skipna)
+    actual_collected = actual.collect_with_direct_runner()
+    xarray.testing.assert_identical(expected, actual_collected)
+
+
 if __name__ == '__main__':
   absltest.main()

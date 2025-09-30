@@ -41,7 +41,9 @@ import textwrap
 from typing import Any, Callable, Literal
 
 import apache_beam as beam
+import numpy.typing as npt
 import xarray
+from xarray_beam._src import combiners
 from xarray_beam._src import core
 from xarray_beam._src import rechunk
 from xarray_beam._src import zarr
@@ -407,6 +409,42 @@ class Dataset:
     ptransform = self.ptransform | label >> rechunk.ConsolidateVariables()
     return type(self)(self.template, self.chunks, split_vars, ptransform)
 
+  def mean(
+      self,
+      dim: str | list[str] | tuple[str, ...] | None = None,
+      *,
+      skipna: bool | None = None,
+      dtype: npt.DTypeLike | None = None,
+      fanout: int | None = None,
+  ) -> Dataset:
+    """Compute the mean of this Dataset using Beam combiners.
+
+    Args:
+      dim: dimension(s) to compute the mean over.
+      skipna: whether to skip missing data when computing the mean.
+      dtype: the desired dtype of the resulting Dataset.
+      fanout: size of an intermediate fanout stage for Beam combiners.
+
+    Returns:
+      New Dataset with the mean computed.
+    """
+    # TODO(shoyer): use heuristics to pick a default fanout size.
+    if dim is None:
+      dims = list(self.template.dims)
+    elif isinstance(dim, str):
+      dims = [dim]
+    else:
+      dims = dim
+    template = zarr.make_template(
+        self.template.mean(dim=dims, skipna=skipna, dtype=dtype)
+    )
+    chunks = {k: v for k, v in self.chunks.items() if k not in dims}
+    label = _get_label(f"mean_{'_'.join(dims)}")
+    ptransform = self.ptransform | label >> combiners.Mean(
+        dim=dims, skipna=skipna, dtype=dtype, fanout=fanout
+    )
+    return type(self)(template, chunks, self.split_vars, ptransform)
+
   _head = _whole_dataset_method('head')
 
   def head(self, **indexers_kwargs: int) -> Dataset:
@@ -418,8 +456,6 @@ class Dataset:
           f'ptransform={self.ptransform}'
       )
     return self._head(**indexers_kwargs)
-
-  # TODO(shoyer): implement merge, rename, mean, etc
 
   # thin wrappers around xarray methods
   __getitem__ = _whole_dataset_method('__getitem__')

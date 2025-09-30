@@ -268,7 +268,7 @@ class _DiscoverTemplate(beam.PTransform):
 
 def _verify_template_is_lazy(template: xarray.Dataset):
   """Verify that a Dataset is suitable for use as a Zarr template."""
-  if not template.chunks:
+  if all(var.chunks is None for var in template.variables.values()):
     # We require at least one chunked variable with Dask. Otherwise, there would
     # be no data to write as part of the Beam pipeline.
     raise ValueError(
@@ -555,7 +555,9 @@ def write_chunk_to_zarr(
     # setup_zarr.
     future = writable_chunk.to_zarr(
         store,
-        region=region,
+        # Xarray has a bug where it does not support region={}. This will be
+        # fixed upstream in https://github.com/pydata/xarray/pull/10796
+        region=region if region else None,
         compute=False,
         consolidated=True,
         mode='r+',

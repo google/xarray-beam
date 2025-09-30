@@ -100,6 +100,7 @@ guarantees.
     Dataset.rechunk
     Dataset.split_variables
     Dataset.consolidate_variables
+    Dataset.mean
     Dataset.head
     Dataset.pipe
 ```
