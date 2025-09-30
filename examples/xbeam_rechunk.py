@@ -61,31 +61,19 @@ def _parse_chunks_str(chunks_str: str) -> dict[str, int]:
 
 
 def main(argv):
-  source_dataset, source_chunks = xbeam.open_zarr(INPUT_PATH.value)
-  template = xbeam.make_template(source_dataset)
-
-  target_chunks = source_chunks | _parse_chunks_str(TARGET_CHUNKS.value)
+  target_chunks = _parse_chunks_str(TARGET_CHUNKS.value)
 
   if TARGET_SHARDS.value is not None:
-    target_shards = source_chunks | _parse_chunks_str(TARGET_SHARDS.value)
+    target_shards = _parse_chunks_str(TARGET_SHARDS.value)
   else:
     target_shards = None
 
-  itemsize = max(variable.dtype.itemsize for variable in template.values())
-
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
-    (
-        root
-        | xbeam.DatasetToChunks(source_dataset, source_chunks, split_vars=True)
-        | xbeam.Rechunk(  # pytype: disable=wrong-arg-types
-            source_dataset.sizes,
-            source_chunks,
-            target_chunks if target_shards is None else target_shards,
-            itemsize=itemsize,
-        )
-        | xbeam.ChunksToZarr(
+    root |= (
+        xbeam.Dataset.from_zarr(INPUT_PATH.value, split_vars=True)
+        .rechunk(target_chunks if target_shards is None else target_shards)
+        .to_zarr(
             OUTPUT_PATH.value,
-            template,
             zarr_chunks=target_chunks,
             zarr_shards=target_shards,
             zarr_format=ZARR_FORMAT.value,
