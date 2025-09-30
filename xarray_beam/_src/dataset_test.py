@@ -23,7 +23,46 @@ from xarray_beam._src import dataset as xbeam_dataset
 from xarray_beam._src import test_util
 
 
+class ToHumanSizeTest(test_util.TestCase):
+
+  @parameterized.named_parameters(
+      dict(testcase_name='zero', size=0, expected='0B'),
+      dict(testcase_name='one_byte', size=1, expected='1B'),
+      dict(testcase_name='nine_bytes', size=9, expected='9B'),
+      dict(testcase_name='ten_bytes', size=10, expected='10B'),
+      dict(testcase_name='ninety_nine_bytes', size=99, expected='99B'),
+      dict(testcase_name='one_hundred_bytes', size=100, expected='100B'),
+      dict(testcase_name='almost_one_kb', size=999, expected='999B'),
+      dict(testcase_name='one_kb', size=1000, expected='1.0kB'),
+      dict(testcase_name='round_to_10_kb', size=9996, expected='10kB'),
+      dict(testcase_name='100_mb', size=10**8, expected='100MB'),
+      dict(testcase_name='one_mb', size=10**6, expected='1.0MB'),
+      dict(testcase_name='one_gb', size=10**9, expected='1.0GB'),
+      dict(testcase_name='one_tb', size=10**12, expected='1.0TB'),
+      dict(testcase_name='one_pb', size=10**15, expected='1.0PB'),
+      dict(testcase_name='one_eb', size=10**18, expected='1.0EB'),
+      dict(testcase_name='one_thousand_eb', size=10**21, expected='1000EB'),
+      dict(testcase_name='ten_thousand_eb', size=10**22, expected='10000EB'),
+  )
+  def test_to_human_size(self, size, expected):
+    self.assertEqual(xbeam_dataset._to_human_size(size), expected)
+
+
 class DatasetTest(test_util.TestCase):
+
+  def test_repr(self):
+    ds = xarray.Dataset({'foo': ('x', np.arange(10))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5})
+    self.assertRegex(
+        repr(beam_ds),
+        re.escape(
+            '<xarray_beam.Dataset>\n'
+            'PTransform: <DatasetToChunks>\n'
+            'Chunks:     40B (x: 5, split_vars=False)\n'
+            'Template:   80B (2 chunks)\n'
+            '    Dimensions:'
+        ).replace('DatasetToChunks', 'DatasetToChunks.*'),
+    )
 
   def test_from_xarray(self):
     ds = xarray.Dataset({'foo': ('x', np.arange(10))})
@@ -33,11 +72,9 @@ class DatasetTest(test_util.TestCase):
     self.assertEqual(beam_ds.template.keys(), {'foo'})
     self.assertEqual(beam_ds.chunks, {'x': 5})
     self.assertFalse(beam_ds.split_vars)
+    self.assertEqual(beam_ds.bytes_per_chunk, 40)
+    self.assertEqual(beam_ds.chunk_count, 2)
     self.assertRegex(beam_ds.ptransform.label, r'^from_xarray_\d+$')
-    self.assertEqual(
-        repr(beam_ds).split('\n')[0],
-        '<xarray_beam.Dataset[x: 5][split_vars=False]>',
-    )
     expected = [
         (xbeam.Key({'x': 0}), ds.head(x=5)),
         (xbeam.Key({'x': 5}), ds.tail(x=5)),
@@ -240,8 +277,8 @@ class DatasetTest(test_util.TestCase):
     with self.assertRaisesWithLiteralMatch(
         ValueError,
         "cannot infer new chunks for dimension 'x' with changed size "
-        "10 -> 3: the 2 chunks along this dimension do not evenly divide "
-        "the new size 3",
+        '10 -> 3: the 2 chunks along this dimension do not evenly divide '
+        'the new size 3',
     ):
       xbeam_dataset._infer_new_chunks(
           old_sizes={'x': 10}, old_chunks={'x': 5}, new_sizes={'x': 3}
@@ -378,11 +415,36 @@ class RechunkingTest(test_util.TestCase):
 
 class EndToEndTest(test_util.TestCase):
 
+  def test_bytes_per_chunk_and_chunk_count(self):
+    source_ds = test_util.dummy_era5_surface_dataset(
+        variables=2, latitudes=73, longitudes=144, times=365, freq='24H'
+    )
+
+    xbeam_ds = xbeam.Dataset.from_xarray(
+        source_ds, {'time': 90}, split_vars=False
+    )
+    self.assertEqual(
+        xbeam_ds.chunks, {'time': 90, 'latitude': 73, 'longitude': 144}
+    )
+    self.assertEqual(xbeam_ds.bytes_per_chunk, 2 * 73 * 144 * 90 * 4)
+    self.assertEqual(xbeam_ds.chunk_count, 5)
+
+    xbeam_ds = xbeam.Dataset.from_xarray(
+        source_ds, {'time': 90}, split_vars=True
+    )
+    self.assertEqual(
+        xbeam_ds.chunks, {'time': 90, 'latitude': 73, 'longitude': 144}
+    )
+    self.assertEqual(xbeam_ds.bytes_per_chunk, 73 * 144 * 90 * 4)
+    self.assertEqual(xbeam_ds.chunk_count, 5 * 2)
+
   def test_docstring_example(self):
     input_path = self.create_tempdir('source').full_path
     output_path = self.create_tempdir('output').full_path
 
-    source_ds = test_util.dummy_era5_surface_dataset(times=365, freq='24H')
+    source_ds = test_util.dummy_era5_surface_dataset(
+        variables=2, latitudes=73, longitudes=144, times=365, freq='24H'
+    )
     source_ds.chunk({'time': 90}).to_zarr(input_path)
 
     transform = (

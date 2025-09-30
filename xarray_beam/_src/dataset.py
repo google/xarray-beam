@@ -33,9 +33,11 @@ from collections.abc import Mapping
 import dataclasses
 import functools
 import itertools
+import math
 import operator
 import os.path
 import tempfile
+import textwrap
 from typing import Any, Callable, Literal
 
 import apache_beam as beam
@@ -43,6 +45,25 @@ import xarray
 from xarray_beam._src import core
 from xarray_beam._src import rechunk
 from xarray_beam._src import zarr
+
+
+def _at_least_two_digits(n: int | float) -> str:
+  if isinstance(n, int):
+    return str(n)
+  elif round(n, 2) < 10:
+    return f'{n:.1f}'
+  else:
+    return f'{n:.0f}'
+
+
+def _to_human_size(nbytes: int) -> str:
+  """Convert a number of bytes to a human-readable string."""
+  for unit in ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB']:
+    if nbytes < 1000:
+      return f'{_at_least_two_digits(nbytes)}{unit}'
+    nbytes /= 1000
+  nbytes *= 1000
+  return f'{_at_least_two_digits(nbytes)}EB'
 
 
 def _infer_new_chunks(
@@ -148,6 +169,50 @@ class Dataset:
 
   def __post_init__(self):
     self.chunks = rechunk.normalize_chunks(self.chunks, self.sizes)
+
+  @property
+  def bytes_per_chunk(self) -> int:
+    """Estimate of the number of bytes per chunk."""
+    variable_sizes = [
+        v.dtype.itemsize * math.prod(self.chunks[d] for d in v.dims)
+        for v in self.template.values()
+    ]
+    return max(variable_sizes) if self.split_vars else sum(variable_sizes)
+
+  @property
+  def chunk_count(self) -> int:
+    """Count the number of chunks in this dataset."""
+    if self.split_vars:
+      total = 0
+      for variable in self.template.values():
+        total += math.prod(
+            math.ceil(self.sizes[d] / self.chunks[d])
+            for d in variable.dims
+        )
+      return total
+    else:
+      return math.prod(
+          math.ceil(self.sizes[d] / self.chunks[d])
+          for d in self.sizes
+      )
+
+  def __repr__(self):
+    base = repr(self.template)
+    chunks_str = ', '.join(
+        [f'{k}: {v}' for k, v in self.chunks.items()]
+        + [f'split_vars={self.split_vars}']
+    )
+    chunk_size = _to_human_size(self.bytes_per_chunk)
+    total_size = _to_human_size(self.template.nbytes)
+    chunk_count = self.chunk_count
+    plural = 's' if chunk_count != 1 else ''
+    return (
+        f'<xarray_beam.Dataset>\n'
+        f'PTransform: {self.ptransform}\n'
+        f'Chunks:     {chunk_size} ({chunks_str})\n'
+        f'Template:   {total_size} ({chunk_count} chunk{plural})\n'
+        + textwrap.indent('\n'.join(base.split('\n')[1:]), ' ' * 4)
+    )
 
   @classmethod
   def from_xarray(
@@ -351,13 +416,5 @@ class Dataset:
   transpose = _whole_dataset_method('transpose')
 
   def pipe(self, func, *args, **kwargs):
+    """Apply a function to this dataset, like xarray.Dataset.pipe()."""
     return func(*args, **kwargs)
-
-  def __repr__(self):
-    base = repr(self.template)
-    chunks_str = ', '.join(f'{k}: {v}' for k, v in self.chunks.items())
-    return (
-        f'<xarray_beam.Dataset[{chunks_str}][split_vars={self.split_vars}]>'
-        + f'\nPTransform: {self.ptransform}\n'
-        + '\n'.join(base.split('\n')[1:])
-    )
