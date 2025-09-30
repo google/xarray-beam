@@ -364,6 +364,19 @@ class MapBlocksTest(test_util.TestCase):
     actual = mapped_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, source)
 
+  def test_map_blocks_new_split_vars_fails(self):
+    source = xarray.Dataset({'foo': ('x', np.arange(10))})
+    source_ds = xbeam.Dataset.from_xarray(source, {'x': 5}, split_vars=True)
+    func = lambda ds: ds.rename({'foo': 'bar'})
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        'cannot use map_blocks on a dataset with split_vars=True if the '
+        'transformation returns a different set of variables.\n'
+        "Old split variables: {'foo'}\n"
+        "New split variables: {'bar'}",
+    ):
+      source_ds.map_blocks(func)
+
 
 class RechunkingTest(test_util.TestCase):
 

@@ -332,6 +332,21 @@ class Dataset:
         ) from e
     template = zarr.make_template(template)  # ensure template is lazy
 
+    if self.split_vars:
+      old_vars = {
+          k for k, v in self.template.variables.items() if v.chunks is not None
+      }
+      new_vars = {
+          k for k, v in template.variables.items() if v.chunks is not None
+      }
+      if old_vars != new_vars:
+        raise ValueError(
+            'cannot use map_blocks on a dataset with split_vars=True if '
+            'the transformation returns a different set of variables.\n'
+            f'Old split variables: {old_vars}\n'
+            f'New split variables: {new_vars}'
+        )
+
     if chunks is None:
       chunks = _infer_new_chunks(
           old_sizes=self.sizes,
