@@ -212,7 +212,7 @@ class DatasetTest(test_util.TestCase):
       xarray.testing.assert_identical(expected, actual)
 
     with self.subTest('already_transformed'):
-      result = beam_ds.map_blocks(lambda x: x).pipe(call, beam_ds)
+      result = beam_ds.map_blocks(lambda x: x).pipe(call)
       actual = result.collect_with_direct_runner()
       xarray.testing.assert_identical(expected, actual)
 
@@ -283,6 +283,14 @@ class DatasetTest(test_util.TestCase):
       xbeam_dataset._infer_new_chunks(
           old_sizes={'x': 10}, old_chunks={'x': 5}, new_sizes={'x': 3}
       )
+
+  def test_pipe(self):
+    source = xarray.Dataset({'foo': ('x', np.arange(10))})
+    source_ds = xbeam.Dataset.from_xarray(source, {'x': 5})
+    mapped_ds = source_ds.pipe(xbeam.Dataset.map_blocks, lambda ds: 2 * ds)
+    expected = 2 * source
+    actual = mapped_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(actual, expected)
 
 
 class MapBlocksTest(test_util.TestCase):

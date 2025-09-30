@@ -139,7 +139,7 @@ def _whole_dataset_method(method_name: str):
       )
     else:
       ptransform = self.ptransform | label >> beam.MapTuple(
-          functools.partial(_apply_to_each_chunk, func)
+          functools.partial(_apply_to_each_chunk, func, self.chunks, chunks)
       )
     return Dataset(template, chunks, self.split_vars, ptransform)
 
@@ -417,4 +417,4 @@ class Dataset:
 
   def pipe(self, func, *args, **kwargs):
     """Apply a function to this dataset, like xarray.Dataset.pipe()."""
-    return func(*args, **kwargs)
+    return func(self, *args, **kwargs)
