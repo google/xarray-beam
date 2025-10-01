@@ -38,9 +38,12 @@ import operator
 import os.path
 import tempfile
 import textwrap
-from typing import Any, Callable, Literal
+from typing import Callable, Literal
 
 import apache_beam as beam
+import dask
+import dask.array.api
+import numpy as np
 import numpy.typing as npt
 import xarray
 from xarray_beam._src import combiners
@@ -66,6 +69,93 @@ def _to_human_size(nbytes: int) -> str:
     nbytes /= 1000
   nbytes *= 1000
   return f'{_at_least_two_digits(nbytes)}EB'
+
+
+def normalize_chunks(
+    chunks: Mapping[str, int | str] | str,
+    template: xarray.Dataset,
+    split_vars: bool = False,
+    previous_chunks: Mapping[str, int] | None = None,
+) -> dict[str, int]:
+  """Normalize chunks for a xarray.Dataset.
+
+  This function interprets various chunk specifications (e.g., -1, 'auto',
+  byte-strings) and returns a dictionary mapping dimension names to
+  concrete integer chunk sizes. It uses ``dask.array.api.normalize_chunks``
+  under the hood.
+
+  Chunk specifications for each dimension can be one of the following:
+    - ``-1``: along this dimension chunks should be the full size of the
+      dimension.
+    - An integer: the exact chunk size for this dimension.
+    - A byte-string (e.g., "64MiB", "1GB"): indicates that dask should pick
+      chunk sizes to aim for chunks of approximately this size. If byte limits
+      are specified for multiple dimensions, they must be consistent (i.e.,
+      parse to the same number of bytes).
+    - ``'auto'``: chunks will be automatically determined for all 'auto'
+      dimensions to ensure chunks are approximately the target number of bytes
+      (defaulting to 128MiB, if no byte limits are specified).
+
+  Args:
+    chunks: The desired chunking scheme. Can either be a dictionary mapping
+      dimension names to chunk sizes, or a single string chunk specification
+      (e.g., 'auto' or '100MiB') to be applied as the default for all
+      dimensions. Dimensions not included in the dictionary default to
+      previous_chunks (if available) or the full size of the dimension.
+    template: An xarray.Dataset providing dimension sizes and dtype information,
+      used for calculating chunk sizes in bytes.
+    split_vars: If True, chunk size limits are applied per-variable, based on
+      the largest variable's dtype. If False, limits are applied to chunks
+      containing all variables, based on the sum of dtypes for all variables.
+    previous_chunks: If provided, hints to dask that chunks should be multiples
+      of ``previous_chunks``, if possible.
+
+  Returns:
+    A dictionary mapping all dimension names to integer chunk sizes.
+  """
+  if isinstance(chunks, str):
+    chunks = {k: chunks for k in template.dims}
+
+  string_chunks = {v for v in chunks.values() if isinstance(v, str)}
+  string_chunks.discard('auto')
+  if len(string_chunks) > 1:
+    raise ValueError(
+        f'cannot specify multiple distinct chunk sizes in bytes: {chunks}'
+    )
+
+  defaults = previous_chunks if previous_chunks else template.sizes
+  chunks: dict[str, int | str] = {**defaults, **chunks}  # pytype: disable=annotation-type-mismatch
+
+  dtypes = {
+      k: v.dtype for k, v in template.variables.items() if v.chunks is not None
+  }
+  if not dtypes:
+    combined_dtype = np.dtype('uint8')  # dummy dtype, won't be used by dask
+  elif split_vars:
+    combined_dtype = max(dtypes.values(), key=lambda dtype: dtype.itemsize)
+  else:
+    combined_dtype = np.dtype(list(dtypes.items()))
+
+  chunks_tuple = tuple(chunks.values())
+  shape = tuple(template.sizes[k] for k in chunks)
+  prev_chunks_tuple = (
+      tuple(previous_chunks[k] for k in chunks) if previous_chunks else None
+  )
+
+  # Note: This values are the same as the dask defaults. Set them explicitly
+  # here to ensure that Xarray-Beam behavior does not depend on the user's
+  # dask configuration.
+  with dask.config.set({
+      'array.chunk-size': '128MiB',
+      'array.chunk-size-tolerance': 1.25,
+  }):
+    normalized_chunks_tuple = dask.array.api.normalize_chunks(
+        chunks_tuple,
+        shape,
+        dtype=combined_dtype,
+        previous_chunks=prev_chunks_tuple,
+    )
+  return {k: v[0] for k, v in zip(chunks, normalized_chunks_tuple)}
 
 
 def _infer_new_chunks(
@@ -122,6 +212,11 @@ def _apply_to_each_chunk(
   return new_key, new_chunk
 
 
+def _concat_labels(label1: str | None, label2: str) -> str:
+  """Concatenate Beam PTransform labels."""
+  return f'{label1}|{label2}' if label1 is not None else label2
+
+
 def _whole_dataset_method(method_name: str):
   """Helper function for defining a method with a fast-path for lazy data."""
 
@@ -136,9 +231,8 @@ def _whole_dataset_method(method_name: str):
       # expensively to xarray.Dataset objects rather than via Xarray-Beam. Try
       # to preserve this option for downstream transformations if possible.
       dataset = func(self.ptransform.dataset)
-      ptransform = label >> core.DatasetToChunks(
-          dataset, chunks, self.split_vars
-      )
+      ptransform = core.DatasetToChunks(dataset, chunks, self.split_vars)
+      ptransform.label = _concat_labels(self.ptransform.label, label)
     else:
       ptransform = self.ptransform | label >> beam.MapTuple(
           functools.partial(_apply_to_each_chunk, func, self.chunks, chunks)
@@ -164,17 +258,62 @@ _get_label = _CountNamer().apply
 class Dataset:
   """Experimental high-level representation of an Xarray-Beam dataset."""
 
-  template: xarray.Dataset
-  chunks: dict[str, int]
-  split_vars: bool
-  ptransform: beam.PTransform
+  def __init__(
+      self,
+      template: xarray.Dataset,
+      chunks: Mapping[str, int],
+      split_vars: bool,
+      ptransform: beam.PTransform,
+  ):
+    """Low level interface for creating a new Dataset, without validation.
 
-  def __post_init__(self):
-    self.chunks = rechunk.normalize_chunks(self.chunks, self.sizes)
+    Most users should use the higher level
+    :py:class:`xarray_beam.Dataset.from_xarray` or
+    :py:class:`xarray_beam.Dataset.from_zarr` instead.
+
+    Args:
+      template: xarray.Dataset describing the structure of this dataset,
+        typically as produced by :py:func:`xarray_beam.make_template`.
+      chunks: mapping from dimension names to chunk sizes. For normalization,
+        use :py:func:`xarray_beam.normalize_chunks`.
+      split_vars: whether variables are split between separate elements in the
+        ptransform, or all stored in the same element.
+      ptransform: Beam PTransform of ``(xbeam.Key, xarray.Dataset)`` tuples with
+        this dataset's data.
+    """
+    self._template = template
+    self._chunks = chunks
+    self._split_vars = split_vars
+    self._ptransform = ptransform
+
+  @property
+  def template(self) -> xarray.Dataset:
+    """Template describing the structure of this dataset."""
+    return self._template
+
+  @property
+  def chunks(self) -> Mapping[str, int]:
+    """Dictionary mapping from dimension names to chunk sizes."""
+    return dict(self._chunks)
+
+  @property
+  def split_vars(self) -> bool:
+    """Whether variables are split between separate elements in the ptransform."""
+    return self._split_vars
+
+  @property
+  def ptransform(self) -> beam.PTransform:
+    """Beam PTransform of (xbeam.Key, xarray.Dataset) with this dataset's data."""
+    return self._ptransform
+
+  @property
+  def sizes(self) -> Mapping[str, int]:
+    """Size of each dimension on this dataset."""
+    return dict(self.template.sizes)  # pytype: disable=bad-return-type
 
   @property
   def bytes_per_chunk(self) -> int:
-    """Estimate of the number of bytes per chunk."""
+    """Estimate of the number of bytes per dataset chunk."""
     variable_sizes = [
         v.dtype.itemsize * math.prod(self.chunks[d] for d in v.dims)
         for v in self.template.values()
@@ -188,14 +327,12 @@ class Dataset:
       total = 0
       for variable in self.template.values():
         total += math.prod(
-            math.ceil(self.sizes[d] / self.chunks[d])
-            for d in variable.dims
+            math.ceil(self.sizes[d] / self.chunks[d]) for d in variable.dims
         )
       return total
     else:
       return math.prod(
-          math.ceil(self.sizes[d] / self.chunks[d])
-          for d in self.sizes
+          math.ceil(self.sizes[d] / self.chunks[d]) for d in self.sizes
       )
 
   def __repr__(self):
@@ -209,7 +346,7 @@ class Dataset:
     chunk_count = self.chunk_count
     plural = 's' if chunk_count != 1 else ''
     return (
-        f'<xarray_beam.Dataset>\n'
+        '<xarray_beam.Dataset>\n'
         f'PTransform: {self.ptransform}\n'
         f'Chunks:     {chunk_size} ({chunks_str})\n'
         f'Template:   {total_size} ({chunk_count} chunk{plural})\n'
@@ -220,26 +357,56 @@ class Dataset:
   def from_xarray(
       cls,
       source: xarray.Dataset,
-      chunks: Mapping[str, int],
+      chunks: Mapping[str, int | str] | str,
+      *,
       split_vars: bool = False,
+      previous_chunks: Mapping[str, int] | None = None,
   ) -> Dataset:
-    """Create an xarray_beam.Dataset from an xarray.Dataset."""
+    """Create an xarray_beam.Dataset from an xarray.Dataset.
+
+    Args:
+      source: xarray.Dataset to read from.
+      chunks: optional mapping from dimension names to chunk sizes, or any value
+        that can be passed to :py:func:`xarray_beam.normalize_chunks`.
+      split_vars: whether variables are split between separate elements in the
+        ptransform, or all stored in the same element.
+      previous_chunks: chunks hint used for parsing string values in ``chunks``
+        with ``normalize_chunks()``.
+    """
     template = zarr.make_template(source)
+    chunks = normalize_chunks(chunks, template, split_vars, previous_chunks)
     ptransform = core.DatasetToChunks(source, chunks, split_vars)
     ptransform.label = _get_label('from_xarray')
     return cls(template, dict(chunks), split_vars, ptransform)
 
-  @property
-  def sizes(self) -> Mapping[str, int]:
-    """Size of each dimension on this dataset."""
-    return self.template.sizes  # pytype: disable=bad-return-type
-
   @classmethod
-  def from_zarr(cls, path: str, split_vars: bool = False) -> Dataset:
-    """Create an xarray_beam.Dataset from a zarr file."""
-    source, chunks = zarr.open_zarr(path)
-    result = cls.from_xarray(source, chunks, split_vars)
-    result.ptransform = _get_label('from_zarr') >> result.ptransform
+  def from_zarr(
+      cls,
+      path: str,
+      *,
+      chunks: Mapping[str, int | str] | str | None = None,
+      split_vars: bool = False,
+  ) -> Dataset:
+    """Create an xarray_beam.Dataset from a Zarr store.
+
+    Args:
+      path: Zarr path to read from.
+      chunks: optional mapping from dimension names to chunk sizes, or any value
+        that can be passed to :py:func:`xarray_beam.normalize_chunks`. If not
+        provided, the chunk sizes will be inferred from the Zarr file.
+      split_vars: whether variables are split between separate elements in the
+        ptransform, or all stored in the same element.
+
+    Returns:
+      New Dataset created from the Zarr store.
+    """
+    source, previous_chunks = zarr.open_zarr(path)
+    if chunks is None:
+      chunks = previous_chunks
+    result = cls.from_xarray(
+        source, chunks, split_vars=split_vars, previous_chunks=previous_chunks
+    )
+    result.ptransform.label = _get_label('from_zarr')
     return result
 
   def _check_shards_or_chunks(
@@ -311,9 +478,7 @@ class Dataset:
               f'{zarr_chunks_per_shard=}, which does not contain a value for '
               f'dimension {dim!r}'
           )
-        zarr_chunks[dim], remainder = divmod(
-            existing_chunk_size, multiple
-        )
+        zarr_chunks[dim], remainder = divmod(existing_chunk_size, multiple)
         if remainder != 0:
           raise ValueError(
               f'cannot write a dataset with chunks {self.chunks} to Zarr with '
@@ -422,38 +587,56 @@ class Dataset:
 
   def rechunk(
       self,
-      chunks: dict[str, int],
+      chunks: dict[str, int | str] | str,
       min_mem: int | None = None,
       max_mem: int = 2**30,
   ) -> Dataset:
     """Rechunk this Dataset.
 
     Args:
-      chunks: new chunk sizes, as a dict mapping from dimension name to chunk
-        size. -1 is interpreted as a "full chunk".
-      min_mem: optional minimum memory usage for rechunking.
-      max_mem: optional maximum memory usage for rechunking.
+      chunks: new chunk sizes, either a dict mapping from dimension name to
+        chunk size, or any value that can be passed to
+        :py:func:`xarray_beam.normalize_chunks`.
+      min_mem: optional minimum memory usage for an intermediate chunk in
+        rechunking. Defaults to ``max_mem/100``.
+      max_mem: optional maximum memory usage ffor an intermediate chunk in
+        rechunking. Defaults to 1GB.
 
     Returns:
       New Dataset with updated chunks.
     """
-    # TODO(shoyer): support human readable strings for chunksizes like dask,
-    # e.g., chunks={"time": "10 MB"}.
-    chunks = rechunk.normalize_chunks(chunks, self.sizes)  # pytype: disable=wrong-arg-types
-    if self.split_vars:
-      itemsize = max(v.dtype.itemsize for v in self.template.values())
-    else:
-      itemsize = sum(v.dtype.itemsize for v in self.template.values())
-    rechunk_transform = rechunk.Rechunk(
-        self.sizes,
-        self.chunks,
+    chunks = normalize_chunks(
         chunks,
-        itemsize=itemsize,
-        min_mem=min_mem,
-        max_mem=max_mem,
+        self.template,
+        split_vars=self.split_vars,
+        previous_chunks=self.chunks,
     )
     label = _get_label('rechunk')
-    ptransform = self.ptransform | label >> rechunk_transform
+
+    if isinstance(self.ptransform, core.DatasetToChunks) and all(
+        chunks[k] % self.chunks[k] == 0 for k in chunks
+    ):
+      # Rechunking can be performed by re-reading the source dataset with new
+      # chunks, rather than using a separate rechunking transform.
+      ptransform = core.DatasetToChunks(
+          self.ptransform.dataset, chunks, self.split_vars
+      )
+      ptransform.label = _concat_labels(self.ptransform.label, label)
+    else:
+      # Need to do a full rechunking.
+      if self.split_vars:
+        itemsize = max(v.dtype.itemsize for v in self.template.values())
+      else:
+        itemsize = sum(v.dtype.itemsize for v in self.template.values())
+      rechunk_transform = rechunk.Rechunk(
+          self.sizes,
+          self.chunks,
+          chunks,
+          itemsize=itemsize,
+          min_mem=min_mem,
+          max_mem=max_mem,
+      )
+      ptransform = self.ptransform | label >> rechunk_transform
     return type(self)(self.template, chunks, self.split_vars, ptransform)
 
   def split_variables(self) -> Dataset:
@@ -479,6 +662,9 @@ class Dataset:
       fanout: int | None = None,
   ) -> Dataset:
     """Compute the mean of this Dataset using Beam combiners.
+
+    This can be significantly faster than using rechunking, but good
+    performance may require tuning ``fanout``.
 
     Args:
       dim: dimension(s) to compute the mean over.
@@ -523,5 +709,5 @@ class Dataset:
   transpose = _whole_dataset_method('transpose')
 
   def pipe(self, func, *args, **kwargs):
-    """Apply a function to this dataset, like xarray.Dataset.pipe()."""
+    """Apply a function to this dataset with method-chaining syntax."""
     return func(self, *args, **kwargs)

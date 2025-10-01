@@ -103,4 +103,5 @@ guarantees.
     Dataset.mean
     Dataset.head
     Dataset.pipe
+    normalize_chunks
 ```

@@ -48,6 +48,149 @@ class ToHumanSizeTest(test_util.TestCase):
     self.assertEqual(xbeam_dataset._to_human_size(size), expected)
 
 
+class NormalizeChunksTest(test_util.TestCase):
+
+  def test_normalize_chunks_minus_one(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = xbeam_dataset.normalize_chunks({'x': -1}, template)
+    self.assertEqual(chunks, {'x': 10})
+
+  def test_normalize_chunks_int(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = xbeam_dataset.normalize_chunks({'x': 5}, template)
+    self.assertEqual(chunks, {'x': 5})
+
+  def test_normalize_chunks_missing_dim(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': (('x', 'y'), np.arange(20).reshape(10, 2))})
+    )
+    chunks = xbeam_dataset.normalize_chunks({'x': 5}, template)
+    self.assertEqual(chunks, {'x': 5, 'y': 2})
+
+  def test_normalize_chunks_previous_chunks(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': (('x', 'y'), np.arange(20).reshape(5, 4))})
+    )
+    chunks = xbeam_dataset.normalize_chunks(
+        '80B', template, previous_chunks={'x': 5, 'y': 1}
+    )
+    self.assertEqual(chunks, {'x': 5, 'y': 2})
+
+  def test_normalize_chunks_auto_small_array(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10, dtype='int64'))})
+    )
+    # default chunk size is 128MiB, so it should not chunk
+    chunks = xbeam_dataset.normalize_chunks('auto', template)
+    self.assertEqual(chunks, {'x': 10})
+
+  def test_normalize_chunks_auto_large_array(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.zeros(2**20, dtype='int64'))})
+    )
+    chunks = xbeam_dataset.normalize_chunks('64KiB', template)
+    # 64KiB = 65536 bytes. float64=8 bytes. 65536/8 = 8192 elements.
+    self.assertEqual(chunks, {'x': 8192})
+
+  def test_normalize_chunks_bytes_limit_string_two_dims_auto(self):
+    template = xbeam.make_template(
+        xarray.Dataset({
+            'foo': (
+                ('x', 'y'),
+                np.arange(10000, dtype='int8').reshape(100, 100),
+            )
+        })
+    )  # 10000 bytes
+    chunks = xbeam_dataset.normalize_chunks('1KiB', template)
+    self.assertEqual(chunks, {'x': 32, 'y': 32})
+
+  def test_normalize_chunks_split_vars_false(self):
+    template = xbeam.make_template(
+        xarray.Dataset({
+            'foo': ('x', np.arange(8192, dtype='float64')),  # 64KiB
+            'bar': ('x', np.arange(8192, dtype='float64')),  # 64KiB
+        })
+    )  # total 128KiB
+    chunks = xbeam_dataset.normalize_chunks('64KiB', template, split_vars=False)
+    self.assertEqual(chunks, {'x': 8192 // 2})
+
+  def test_normalize_chunks_split_vars_true(self):
+    template = xbeam.make_template(
+        xarray.Dataset({
+            'foo': ('x', np.arange(8192, dtype='float64')),  # 64KiB
+            'bar': ('x', np.arange(8192, dtype='int8')),  # 8KiB
+        })
+    )
+    chunks = xbeam_dataset.normalize_chunks('32KiB', template, split_vars=True)
+    self.assertEqual(chunks, {'x': 4096})
+
+  def test_normalize_chunks_empty_chunks_dict(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = xbeam_dataset.normalize_chunks({}, template, split_vars=False)
+    self.assertEqual(chunks, {'x': 10})
+
+  def test_normalize_chunks_empty_chunks_dict_with_previous(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = xbeam_dataset.normalize_chunks(
+        {}, template, split_vars=False, previous_chunks={'x': 5}
+    )
+    self.assertEqual(chunks, {'x': 5})
+
+  def test_normalize_chunks_chunk_gt_dim_size(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = xbeam_dataset.normalize_chunks(
+        {'x': 100}, template, split_vars=False
+    )
+    self.assertEqual(chunks, {'x': 10})
+
+  def test_normalize_chunks_aspect_ratio(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': (('x', 'y'), np.zeros((100, 100)))})
+    )
+    chunks = xbeam_dataset.normalize_chunks(
+        f'{20*50*8}B',
+        template,
+        previous_chunks={'x': 10, 'y': 25},
+    )
+    self.assertEqual(chunks, {'x': 20, 'y': 50})
+
+  def test_normalize_chunks_inconsistent_byte_limits_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': (('x', 'y'), np.arange(100).reshape(10, 10))})
+    )
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        'cannot specify multiple distinct chunk sizes in bytes: '
+        "{'x': '1KiB', 'y': '2KiB'}",
+    ):
+      xbeam_dataset.normalize_chunks(
+          {'x': '1KiB', 'y': '2KiB'}, template, split_vars=False
+      )
+
+  @parameterized.parameters(
+      dict(chunks_input='auto', split_vars=False),
+      dict(chunks_input={}, split_vars=False),
+      dict(chunks_input='auto', split_vars=True),
+      dict(chunks_input={}, split_vars=True),
+  )
+  def test_normalize_chunks_empty_dataset(self, chunks_input, split_vars):
+    template = xbeam.make_template(xarray.Dataset())
+    chunks = xbeam_dataset.normalize_chunks(
+        chunks_input, template, split_vars=split_vars
+    )
+    self.assertEqual(chunks, {})
+
+
 class DatasetTest(test_util.TestCase):
 
   def test_repr(self):
@@ -107,12 +250,27 @@ class DatasetTest(test_util.TestCase):
     ds = xarray.Dataset({'foo': ('x', np.arange(10))})
     ds.chunk({'x': 5}).to_zarr(temp_dir)
 
-    beam_ds = xbeam.Dataset.from_zarr(temp_dir, split_vars)
+    beam_ds = xbeam.Dataset.from_zarr(temp_dir, split_vars=split_vars)
 
     self.assertRegex(beam_ds.ptransform.label, r'^from_zarr_\d+$')
     self.assertEqual(beam_ds.chunks, {'x': 5})
     self.assertEqual(beam_ds.split_vars, split_vars)
 
+    collected = beam_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(ds, collected)
+
+  def test_from_zarr_with_chunks(self):
+    temp_dir = self.create_tempdir().full_path
+    ds = xarray.Dataset({'foo': (('x', 'y'), np.zeros((100, 100)))})
+    ds.chunk({'x': 10, 'y': 25}).to_zarr(temp_dir)
+
+    beam_ds = xbeam.Dataset.from_zarr(temp_dir, chunks=f'{20*50*8}B')
+    self.assertEqual(beam_ds.chunks, {'x': 20, 'y': 50})
+    collected = beam_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(ds, collected)
+
+    beam_ds = xbeam.Dataset.from_zarr(temp_dir, chunks='auto')
+    self.assertEqual(beam_ds.chunks, {'x': 100, 'y': 100})
     collected = beam_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(ds, collected)
 
@@ -184,9 +342,7 @@ class DatasetTest(test_util.TestCase):
 
     with self.subTest('simple'):
       with beam.Pipeline() as p:
-        p |= beam_ds.to_zarr(
-            temp_dir, zarr_chunks_per_shard={'x': 2}
-        )
+        p |= beam_ds.to_zarr(temp_dir, zarr_chunks_per_shard={'x': 2})
       opened, chunks = xbeam.open_zarr(temp_dir)
       xarray.testing.assert_identical(ds, opened)
       self.assertEqual(chunks, {'x': 3})
@@ -482,6 +638,19 @@ class RechunkingTest(test_util.TestCase):
     rechunked_ds = beam_ds.rechunk(target_chunks)
 
     self.assertEqual(rechunked_ds.chunks, {'x': 2, 'y': 4})
+    actual = rechunked_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(actual, source)
+
+  def test_rechunk_from_zarr_without_ptransform(self):
+    source = xarray.Dataset({'foo': (('x', 'y'), np.zeros((100, 100)))})
+    beam_ds = xbeam.Dataset.from_xarray(source, {'x': 10, 'y': 10})
+    rechunked_ds = beam_ds.rechunk({'x': 20, 'y': 20})
+
+    self.assertEqual(rechunked_ds.chunks, {'x': 20, 'y': 20})
+    self.assertIsInstance(rechunked_ds.ptransform, xbeam.DatasetToChunks)
+    self.assertRegex(
+        rechunked_ds.ptransform.label, r'^from_xarray_\d+|rechunk_\d+$'
+    )
     actual = rechunked_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, source)
 
