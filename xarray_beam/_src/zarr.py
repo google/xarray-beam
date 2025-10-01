@@ -409,6 +409,7 @@ def _setup_zarr(
       zarr_format=zarr_format,
       encoding=encoding,
   )
+  logging.info('finished setting up Zarr')
 
 
 def setup_zarr(
