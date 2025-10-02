@@ -38,6 +38,7 @@ import operator
 import os.path
 import tempfile
 import textwrap
+import types
 from typing import Callable, Literal
 
 import apache_beam as beam
@@ -71,16 +72,19 @@ def _to_human_size(nbytes: int) -> str:
   return f'{_at_least_two_digits(nbytes)}EB'
 
 
+UnnormalizedChunks = Mapping[str | types.EllipsisType, int | str] | int | str
+
+
 def normalize_chunks(
-    chunks: Mapping[str, int | str] | str,
+    chunks: UnnormalizedChunks,
     template: xarray.Dataset,
     split_vars: bool = False,
     previous_chunks: Mapping[str, int] | None = None,
 ) -> dict[str, int]:
   """Normalize chunks for a xarray.Dataset.
 
-  This function interprets various chunk specifications (e.g., -1, 'auto',
-  byte-strings) and returns a dictionary mapping dimension names to
+  This function interprets various chunk specifications (e.g., integer sizes or
+  numbers of bytes) and returns a dictionary mapping dimension names to
   concrete integer chunk sizes. It uses ``dask.array.api.normalize_chunks``
   under the hood.
 
@@ -89,19 +93,28 @@ def normalize_chunks(
       dimension.
     - An integer: the exact chunk size for this dimension.
     - A byte-string (e.g., "64MiB", "1GB"): indicates that dask should pick
-      chunk sizes to aim for chunks of approximately this size. If byte limits
-      are specified for multiple dimensions, they must be consistent (i.e.,
-      parse to the same number of bytes).
-    - ``'auto'``: chunks will be automatically determined for all 'auto'
-      dimensions to ensure chunks are approximately the target number of bytes
-      (defaulting to 128MiB, if no byte limits are specified).
+      chunk sizes to aim for chunks of approximately this size.
+
+  Only a single string value indicating a number of bytes can be specified. To
+  indicate that chunking applies to multiple dimensions, use a dict key of
+  ``...``.
+
+  Some examples:
+    - ``chunks={'time': 100}``: Each chunk will have exactly 100 elements along
+      the 'time' dimension.
+    - ``chunks="200MB"``: Create chunks that are approximately 200MB in size.
+    - ``chunks={'time': -1, ...: "100MB"}``: Chunks should include the full
+      'time' dimension, and be chunked along other dimensions such that
+      resulting chunks are approximately 100MiB in size.
 
   Args:
     chunks: The desired chunking scheme. Can either be a dictionary mapping
-      dimension names to chunk sizes, or a single string chunk specification
-      (e.g., 'auto' or '100MiB') to be applied as the default for all
+      dimension names to chunk sizes, or a single string/integer chunk
+      specification (e.g., '100MB') to be applied as the default for all
       dimensions. Dimensions not included in the dictionary default to
-      previous_chunks (if available) or the full size of the dimension.
+      ``previous_chunks`` (if available) or the full size of the dimension. A
+      dict key of ellipsis (...) can also be used to indicate "all other
+      dimensions".
     template: An xarray.Dataset providing dimension sizes and dtype information,
       used for calculating chunk sizes in bytes.
     split_vars: If True, chunk size limits are applied per-variable, based on
@@ -113,15 +126,34 @@ def normalize_chunks(
   Returns:
     A dictionary mapping all dimension names to integer chunk sizes.
   """
-  if isinstance(chunks, str):
-    chunks = {k: chunks for k in template.dims}
+  raw_chunks = chunks
 
-  string_chunks = {v for v in chunks.values() if isinstance(v, str)}
-  string_chunks.discard('auto')
-  if len(string_chunks) > 1:
-    raise ValueError(
-        f'cannot specify multiple distinct chunk sizes in bytes: {chunks}'
-    )
+  if isinstance(chunks, str | int):
+    if chunks == 'auto':
+      raise ValueError(
+          'Unlike Dask, xarray_beam.normalize_chunks() does not support '
+          "chunks='auto'. Supply an explicit number of bytes instead, e.g., "
+          "chunks='100MB'."
+      )
+    chunks = {k: chunks for k in template.dims}
+  elif isinstance(chunks, Mapping):
+    string_chunks = {v for v in chunks.values() if isinstance(v, str)}
+    if len(string_chunks) > 1:
+      raise ValueError(
+          f'cannot provide multiple distinct chunk sizes in bytes: {chunks}'
+      )
+    if any(v == 'auto' for v in chunks.values()):
+      raise ValueError(
+          'Unlike Dask, xarray_beam.normalize_chunks() does not support '
+          "'auto' chunk sizes. Supply an explicit number of bytes instead, "
+          f"e.g., '100MB'. Got {chunks=}"
+      )
+  else:
+    raise TypeError(f'chunks must be a string or a mapping, got {chunks=}')
+
+  if ... in chunks:
+    default_chunks = chunks[...]
+    chunks = {k: chunks.get(k, default_chunks) for k in template.dims}
 
   defaults = previous_chunks if previous_chunks else template.sizes
   chunks: dict[str, int | str] = {**defaults, **chunks}  # pytype: disable=annotation-type-mismatch
@@ -142,19 +174,22 @@ def normalize_chunks(
       tuple(previous_chunks[k] for k in chunks) if previous_chunks else None
   )
 
-  # Note: This values are the same as the dask defaults. Set them explicitly
-  # here to ensure that Xarray-Beam behavior does not depend on the user's
-  # dask configuration.
-  with dask.config.set({
-      'array.chunk-size': '128MiB',
-      'array.chunk-size-tolerance': 1.25,
-  }):
-    normalized_chunks_tuple = dask.array.api.normalize_chunks(
-        chunks_tuple,
-        shape,
-        dtype=combined_dtype,
-        previous_chunks=prev_chunks_tuple,
-    )
+  # Note: This is the same as the dask default. Set chunk-size-tolerance
+  # explicitly here to ensure that Xarray-Beam behavior does not depend on the
+  # user's dask configuration.
+  with dask.config.set({'array.chunk-size-tolerance': 1.25}):
+    try:
+      normalized_chunks_tuple = dask.array.api.normalize_chunks(
+          chunks_tuple,
+          shape,
+          dtype=combined_dtype,
+          previous_chunks=prev_chunks_tuple,
+      )
+    except ValueError as e:
+      raise ValueError(
+          f'Invalid input for normalize_chunks: chunks={raw_chunks!r}, '
+          f'{previous_chunks=}, {template=}'
+      ) from e
   return {k: v[0] for k, v in zip(chunks, normalized_chunks_tuple)}
 
 
@@ -282,7 +317,9 @@ class Dataset:
         this dataset's data.
     """
     self._template = template
-    self._chunks = chunks
+    self._chunks = {
+        k: min(template.sizes[k], v) for k, v in chunks.items()
+    }
     self._split_vars = split_vars
     self._ptransform = ptransform
 
@@ -357,7 +394,7 @@ class Dataset:
   def from_xarray(
       cls,
       source: xarray.Dataset,
-      chunks: Mapping[str, int | str] | str,
+      chunks: UnnormalizedChunks,
       *,
       split_vars: bool = False,
       previous_chunks: Mapping[str, int] | None = None,
@@ -384,7 +421,7 @@ class Dataset:
       cls,
       path: str,
       *,
-      chunks: Mapping[str, int | str] | str | None = None,
+      chunks: UnnormalizedChunks | None = None,
       split_vars: bool = False,
   ) -> Dataset:
     """Create an xarray_beam.Dataset from a Zarr store.
@@ -426,8 +463,8 @@ class Dataset:
       path: str,
       *,
       zarr_chunks_per_shard: Mapping[str, int] | None = None,
-      zarr_chunks: Mapping[str, int] | None = None,
-      zarr_shards: Mapping[str, int] | None = None,
+      zarr_chunks: UnnormalizedChunks | None = None,
+      zarr_shards: UnnormalizedChunks | None = None,
       zarr_format: int | None = None,
   ) -> beam.PTransform:
     """Write this dataset to a Zarr file.
@@ -461,14 +498,21 @@ class Dataset:
     Returns:
       Beam PTransform that writes the dataset to a Zarr file.
     """
+    if zarr_shards is not None:
+      zarr_shards = normalize_chunks(
+          zarr_shards,
+          self.template,
+          split_vars=self.split_vars,
+          previous_chunks=self.chunks,
+      )
+
     if zarr_chunks_per_shard is not None:
       if zarr_chunks is not None:
         raise ValueError(
             'cannot supply both zarr_chunks_per_shard and zarr_chunks'
         )
       if zarr_shards is None:
-        zarr_shards = {}
-      zarr_shards = {**self.chunks, **zarr_shards}
+        zarr_shards = self.chunks
       zarr_chunks = {}
       for dim, existing_chunk_size in zarr_shards.items():
         multiple = zarr_chunks_per_shard.get(dim)
@@ -490,9 +534,13 @@ class Dataset:
         raise ValueError('cannot supply zarr_shards without zarr_chunks')
       zarr_chunks = {}
 
-    zarr_chunks = {**self.chunks, **zarr_chunks}
+    zarr_chunks = normalize_chunks(
+        zarr_chunks,
+        self.template,
+        split_vars=self.split_vars,
+        previous_chunks=self.chunks,
+    )
     if zarr_shards is not None:
-      zarr_shards = {**self.chunks, **zarr_shards}
       self._check_shards_or_chunks(zarr_shards, 'shards')
     else:
       self._check_shards_or_chunks(zarr_chunks, 'chunks')
@@ -537,9 +585,9 @@ class Dataset:
         attempt will be made to infer the template by applying ``func`` to the
         existing template, which requires that ``func`` is implemented using
         dask compatible operations.
-      chunks: new chunks sizes for the resulting dataset. If not provided, an
-        attempt will be made to infer the new chunks based on the existing
-        chunks, dimensions sizes and the new template.
+      chunks: explicit new chunks sizes created by applying ``func``. If not
+        provided, an attempt will be made to infer the new chunks based on the
+        existing chunks, dimensions sizes and the new template.
 
     Returns:
       New Dataset with updated chunks.
@@ -587,7 +635,7 @@ class Dataset:
 
   def rechunk(
       self,
-      chunks: dict[str, int | str] | str,
+      chunks: UnnormalizedChunks,
       min_mem: int | None = None,
       max_mem: int = 2**30,
   ) -> Dataset:

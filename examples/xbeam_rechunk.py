@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Rechunk a Zarr dataset."""
+import types
+
 from absl import app
 from absl import flags
 import apache_beam as beam
@@ -51,22 +53,38 @@ RUNNER = flags.DEFINE_string('runner', None, help='beam.runners.Runner')
 # pylint: disable=expression-not-assigned
 
 
-def _parse_chunks_str(chunks_str: str) -> dict[str, int]:
+def _try_to_int(chunks_str: str) -> int | str:
+  try:
+    return int(chunks_str)
+  except ValueError:
+    return chunks_str
+
+
+def _parse_chunks_flag(
+    chunks_str: str,
+) -> dict[str | types.EllipsisType, int | str] | int | str:
+  """Parse a string representation of unnormalized chunks."""
+  if '=' not in chunks_str:
+    return _try_to_int(chunks_str)
+
   chunks = {}
   parts = chunks_str.split(',')
   for part in parts:
     k, v = part.split('=')
-    chunks[k] = int(v)
+    if k == '...':
+      k = ...
+    chunks[k] = _try_to_int(v)
   return chunks
 
 
 def main(argv):
-  target_chunks = _parse_chunks_str(TARGET_CHUNKS.value)
+  target_chunks = _parse_chunks_flag(TARGET_CHUNKS.value)
 
-  if TARGET_SHARDS.value is not None:
-    target_shards = _parse_chunks_str(TARGET_SHARDS.value)
-  else:
-    target_shards = None
+  target_shards = (
+      _parse_chunks_flag(TARGET_SHARDS.value)
+      if TARGET_SHARDS.value is not None
+      else None
+  )
 
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
     root |= (

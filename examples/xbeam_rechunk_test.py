@@ -16,9 +16,9 @@
 from absl.testing import absltest
 from absl.testing import flagsaver
 import xarray
+from xarray_beam._src import test_util
 
 from . import xbeam_rechunk
-from xarray_beam._src import test_util
 
 
 class Era5RechunkTest(test_util.TestCase):
@@ -27,20 +27,25 @@ class Era5RechunkTest(test_util.TestCase):
     input_path = self.create_tempdir('source').full_path
     output_path = self.create_tempdir('destination').full_path
 
-    input_ds = test_util.dummy_era5_surface_dataset(times=365)
+    input_ds = test_util.dummy_era5_surface_dataset(
+        latitudes=100, longitudes=200, times=365
+    )
     input_ds.chunk({'time': 31}).to_zarr(input_path)
 
     with flagsaver.flagsaver(
         input_path=input_path,
         output_path=output_path,
-        target_chunks='latitude=5,longitude=5,time=-1',
+        target_chunks=f'time=-1,...={365*10*20*4}B',
     ):
       xbeam_rechunk.main([])
 
     output_ds = xarray.open_zarr(output_path)
+    # dask.array tries to preserve the aspect ratio of the original array when
+    # splitting across dimensions, hence the 2x ratio between latitude and
+    # longitude.
     self.assertEqual(
         {k: v[0] for k, v in output_ds.chunks.items()},
-        {'latitude': 5, 'longitude': 5, 'time': 365}
+        {'latitude': 10, 'longitude': 20, 'time': 365},
     )
     xarray.testing.assert_identical(input_ds, output_ds)
 
@@ -63,7 +68,7 @@ class Era5RechunkTest(test_util.TestCase):
     output_ds = xarray.open_zarr(output_path)
     self.assertEqual(
         {k: v[0] for k, v in output_ds.chunks.items()},
-        {'latitude': 5, 'longitude': 5, 'time': 365}
+        {'latitude': 5, 'longitude': 5, 'time': 365},
     )
     actual_shards = {k: v.encoding['shards'] for k, v in output_ds.items()}
     expected_shards = {k: (365, 10, 10) for k, v in output_ds.items()}
