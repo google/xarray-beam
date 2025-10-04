@@ -92,9 +92,10 @@ guarantees.
     :toctree: _autosummary
 
     Dataset
-    Dataset.from_xarray
     Dataset.from_zarr
     Dataset.to_zarr
+    Dataset.from_xarray
+    Dataset.from_ptransform
     Dataset.collect_with_direct_runner
     Dataset.map_blocks
     Dataset.rechunk

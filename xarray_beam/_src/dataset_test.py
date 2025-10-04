@@ -17,6 +17,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import apache_beam as beam
 import numpy as np
+import pandas as pd
 import xarray
 import xarray_beam as xbeam
 from xarray_beam._src import dataset as xbeam_dataset
@@ -245,6 +246,231 @@ class NormalizeChunksTest(test_util.TestCase):
       xbeam_dataset.normalize_chunks('invalid_chunks', template)
 
 
+class NormalizeAndValidateChunkTest(test_util.TestCase):
+
+  def test_valid(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(5))})
+    xbeam_dataset._normalize_and_validate_chunk(
+        template, chunks, False, key, dataset
+    )
+
+  def test_normalize_vars_none_with_split_vars_true(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(5))})
+    new_key, _ = xbeam_dataset._normalize_and_validate_chunk(
+        template, chunks, True, key, dataset
+    )
+    self.assertEqual(new_key.vars, {'foo'})
+
+  def test_normalize_missing_offset(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': (('x', 'y'), np.zeros((10, 5)))})
+    )
+    chunks = {'x': 10, 'y': 5}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'foo': (('x', 'y'), np.zeros((10, 5)))})
+    new_key, _ = xbeam_dataset._normalize_and_validate_chunk(
+        template, chunks, False, key, dataset
+    )
+    self.assertEqual(new_key.offsets, {'x': 0, 'y': 0})
+
+  def test_variable_not_in_template_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'bar': ('x', np.arange(5))})
+    with self.assertRaisesRegex(
+        ValueError, "Chunk variable 'bar' not found in template variables"
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+  def test_dtype_mismatch_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10, dtype=np.int64))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(5, dtype=np.float32))})
+    with self.assertRaisesRegex(
+        ValueError,
+        "Chunk variable 'foo' has dtype float32 which does not match template"
+        ' variable dtype int64',
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+  def test_dims_mismatch_error(self):
+    template_with_y = xbeam.make_template(
+        xarray.Dataset({'foo': (('x', 'y'), np.arange(10).reshape(10, 1))})
+    )
+    chunks = {'x': 5, 'y': 1}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'foo': (('x', 'y'), np.arange(5).reshape(5, 1))})
+    squeezed_ds = dataset.squeeze('y', drop=True)
+    with self.assertRaisesRegex(
+        ValueError,
+        "Chunk variable 'foo' has dims.*which does not match template variable"
+        ' dims',
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template_with_y, chunks, False, key, squeezed_ds
+      )
+
+  def test_chunk_dim_not_in_chunks_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(5))})
+    with self.assertRaisesRegex(
+        ValueError, "Dataset dimension 'x' not found in chunks"
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+  def test_chunk_size_exceeds_template_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 5})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
+    with self.assertRaisesRegex(
+        ValueError,
+        "Chunk dimension 'x' has size 6 which is larger than the remaining size"
+        ' 5 in the template',
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+  def test_chunk_size_mismatch_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(4))})
+    with self.assertRaisesRegex(
+        ValueError,
+        "Chunk dimension 'x' has size 4 which does not match chunk size 5",
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+  def test_split_vars_false_with_vars_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0}, vars={'foo'})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(5))})
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        'must not set vars on key if split_vars=False:'
+        " Key(offsets={'x': 0}, vars={'foo'})",
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+  def test_split_vars_true_extra_vars_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset(
+            {'foo': ('x', np.arange(10)), 'bar': ('x', np.arange(10))}
+        )
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0}, vars={'foo'})
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(5)), 'bar': ('x', np.arange(5))}
+    )
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        "dataset keys ['bar', 'foo'] do not match key.vars=['foo']",
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, True, key, dataset
+      )
+
+  def test_split_vars_true_missing_var_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset(
+            {'foo': ('x', np.arange(10)), 'bar': ('x', np.arange(10))}
+        )
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0}, vars={'foo', 'bar'})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(5))})
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        "dataset keys ['foo'] do not match key.vars=['bar', 'foo']",
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, True, key, dataset
+      )
+
+  def test_offset_not_aligned_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 1})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(5))})
+    with self.assertRaisesRegex(
+        ValueError,
+        "Chunk offset 1 is not aligned with chunk size 5 for dimension 'x'",
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+  def test_last_chunk_incorrect_size_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(12))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 10})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(1))})  # should be 2
+    with self.assertRaisesRegex(
+        ValueError,
+        "Chunk dimension 'x' is the last chunk, but has size 1 which does not "
+        'match expected size 2',
+    ):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+  def test_dask_chunked_input_error(self):
+    template = xbeam.make_template(
+        xarray.Dataset({'foo': ('x', np.arange(10))})
+    )
+    chunks = {'x': 5}
+    key = xbeam.Key({'x': 0})
+    dataset = xarray.Dataset({'foo': ('x', np.arange(5))}).chunk({'x': 1})
+    with self.assertRaisesRegex(ValueError, 'chunked with Dask'):
+      xbeam_dataset._normalize_and_validate_chunk(
+          template, chunks, False, key, dataset
+      )
+
+
 class DatasetTest(test_util.TestCase):
 
   def test_repr(self):
@@ -260,6 +486,58 @@ class DatasetTest(test_util.TestCase):
             '    Dimensions:'
         ).replace('DatasetToChunks', 'DatasetToChunks.*'),
     )
+
+  def test_from_ptransform(self):
+    source = xarray.Dataset({'foo': ('x', np.arange(10))})
+    chunks = {'x': 5}
+    template = xbeam.make_template(source)
+    ptransform = beam.Create([
+        (xbeam.Key({'x': 0}), source.head(x=5)),
+        (xbeam.Key({'x': 5}), source.tail(x=5)),
+    ])
+    beam_ds = xbeam.Dataset.from_ptransform(
+        ptransform, template=template, chunks=chunks
+    )
+    self.assertIsInstance(beam_ds, xbeam.Dataset)
+    self.assertEqual(beam_ds.chunks, {'x': 5})
+    self.assertFalse(beam_ds.split_vars)
+    actual = beam_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(actual, source)
+
+  def test_from_ptransform_errors(self):
+    source = xarray.Dataset({'foo': ('x', np.arange(10))})
+    chunks = {'x': 5}
+    template = xbeam.make_template(source)
+    ptransform = beam.Create([
+        (xbeam.Key({'x': 0}), source.head(x=5)),
+        (xbeam.Key({'x': 5}), source.tail(x=5)),
+    ])
+    with self.assertRaisesWithLiteralMatch(
+        TypeError,
+        'chunks must be a mapping for from_ptransform, got 5',
+    ):
+      xbeam.Dataset.from_ptransform(ptransform, template=template, chunks=5)
+
+    with self.assertRaisesWithLiteralMatch(
+        TypeError,
+        'chunks must be a mapping with integer values for from_ptransform,'
+        " got {'x': '5'}",
+    ):
+      xbeam.Dataset.from_ptransform(
+          ptransform, template=template, chunks={'x': '5'}
+      )
+
+    # Use list inputs so the pipeline is evaluated eagerly.
+    list_inputs = [
+        (xbeam.Key({'x': 0}), source.head(x=5).astype(float)),
+    ]
+    with self.assertRaisesRegex(
+        ValueError,
+        "Chunk variable 'foo' has dtype float64 which does not match",
+    ):
+      xbeam.Dataset.from_ptransform(
+          list_inputs, template=template, chunks=chunks
+      )
 
   def test_from_xarray(self):
     ds = xarray.Dataset({'foo': ('x', np.arange(10))})
@@ -375,7 +653,9 @@ class DatasetTest(test_util.TestCase):
     with self.subTest('same_zarr_shards_as_chunks'):
       with beam.Pipeline() as p:
         p |= beam_ds.to_zarr(
-            temp_dir, zarr_chunks={'x': 3}, zarr_shards={'x': 6},
+            temp_dir,
+            zarr_chunks={'x': 3},
+            zarr_shards={'x': 6},
         )
       opened, chunks = xbeam.open_zarr(temp_dir)
       xarray.testing.assert_identical(ds, opened)
@@ -385,7 +665,9 @@ class DatasetTest(test_util.TestCase):
     with self.subTest('unnormalized_shards'):
       with beam.Pipeline() as p:
         p |= beam_ds.to_zarr(
-            temp_dir, zarr_chunks='24B', zarr_shards='48B',
+            temp_dir,
+            zarr_chunks='24B',
+            zarr_shards='48B',
         )
       opened, chunks = xbeam.open_zarr(temp_dir)
       xarray.testing.assert_identical(ds, opened)
@@ -399,7 +681,9 @@ class DatasetTest(test_util.TestCase):
           "{'x': 9}, which do not divide evenly into shards",
       ):
         beam_ds.to_zarr(
-            temp_dir, zarr_chunks={'x': 3}, zarr_shards={'x': 9},
+            temp_dir,
+            zarr_chunks={'x': 3},
+            zarr_shards={'x': 9},
         )
 
   def test_to_zarr_chunks_per_shard(self):
@@ -830,6 +1114,27 @@ class EndToEndTest(test_util.TestCase):
     actual, chunks = xbeam.open_zarr(output_path)
     xarray.testing.assert_identical(expected, actual)
     self.assertEqual(chunks, {'time': 10, 'latitude': 73, 'longitude': 144})
+
+  def test_from_ptransform_docs_example(self):
+    source_ds = test_util.dummy_era5_surface_dataset(
+        times=5, freq='1D', latitudes=3, longitudes=4
+    )
+    all_times = source_ds.time.values
+
+    def load_chunk(time_val: np.datetime64) -> tuple[xbeam.Key, xarray.Dataset]:
+      days = int((time_val - all_times[0]) / np.timedelta64(1, 'D'))
+      key = xbeam.Key({'time': days})
+      dataset = source_ds.sel(time=[time_val])
+      return key, dataset
+
+    ptransform = beam.Create(all_times) | 'LoadChunks' >> beam.Map(load_chunk)
+
+    template = xbeam.make_template(source_ds)
+    ds_beam = xbeam.Dataset.from_ptransform(
+        ptransform, template=template, chunks={'time': 1}
+    )
+    actual = ds_beam.collect_with_direct_runner()
+    xarray.testing.assert_identical(source_ds, actual)
 
 
 class MeanTest(test_util.TestCase):

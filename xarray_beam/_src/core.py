@@ -505,6 +505,21 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     )
 
 
+def _ensure_chunk_is_computed(key: Key,dataset: xarray.Dataset) -> None:
+  """Ensure that a dataset contains no chunked variables."""
+  for var_name, variable in dataset.variables.items():
+    if variable.chunks is not None:
+      raise ValueError(
+          f"Dataset variable {var_name!r} corresponding to key {key} is"
+          " chunked with Dask. Datasets passed to validate_chunk must be"
+          f" fully computed (not chunked): {dataset}\nThis typically arises"
+          " with datasets originating with `xarray.open_zarr()`, which by"
+          " default use Dask. If this is the case, you can fix it by passing"
+          " `chunks=None` or xarray_beam.open_zarr(). Alternatively, you"
+          " can load datasets explicitly into memory with `.compute()`."
+      )
+
+
 def validate_chunk(key: Key, datasets: DatasetOrDatasets) -> None:
   """Verify that a key and dataset(s) are valid for xarray-beam transforms."""
   if isinstance(datasets, xarray.Dataset):
@@ -512,17 +527,7 @@ def validate_chunk(key: Key, datasets: DatasetOrDatasets) -> None:
 
   for dataset in datasets:
     # Verify that no variables are chunked with Dask
-    for var_name, variable in dataset.variables.items():
-      if variable.chunks is not None:
-        raise ValueError(
-            f"Dataset variable {var_name!r} corresponding to key {key} is"
-            " chunked with Dask. Datasets passed to validate_chunk must be"
-            f" fully computed (not chunked): {dataset}\nThis typically arises"
-            " with datasets originating with `xarray.open_zarr()`, which by"
-            " default use Dask. If this is the case, you can fix it by passing"
-            " `chunks=None` or xarray_beam.open_zarr(). Alternatively, you"
-            " can load datasets explicitly into memory with `.compute()`."
-        )
+    _ensure_chunk_is_computed(key, dataset)
 
     # Validate key offsets
     missing_keys = [

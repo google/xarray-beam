@@ -227,6 +227,98 @@ def _infer_new_chunks(
   return new_chunks
 
 
+def _normalize_and_validate_chunk(
+    template: xarray.Dataset,
+    chunks: Mapping[str, int],
+    split_vars: bool,
+    key: core.Key,
+    dataset: xarray.Dataset,
+) -> tuple[core.Key, xarray.Dataset]:
+  """Validate and normalize (key, dataset) pairs for a Dataset."""
+
+  if split_vars:
+    if key.vars is None:
+      key = key.replace(vars=set(dataset.keys()))
+    elif key.vars != set(dataset.keys()):
+      raise ValueError(
+          f'dataset keys {sorted(dataset.keys())} do not match'
+          f' key.vars={sorted(key.vars)}'
+      )
+  elif key.vars is not None:
+    raise ValueError(f'must not set vars on key if split_vars=False: {key}')
+
+  new_offsets = dict(key.offsets)
+  for dim in dataset.dims:
+    if dim not in new_offsets:
+      new_offsets[dim] = 0
+  if len(new_offsets) != len(key.offsets):
+    key = key.replace(offsets=new_offsets)
+
+  core._ensure_chunk_is_computed(key, dataset)
+
+  def _with_dataset(msg: str):
+    dataset_repr = textwrap.indent(repr(dataset), prefix='    ')
+    return f'{msg}\nKey: {key}\nDataset chunk:\n{dataset_repr}'
+
+  def _bad_template_error(msg: str):
+    template_repr = textwrap.indent(repr(template), prefix='    ')
+    raise ValueError(_with_dataset(msg) + f'Template:\n{template_repr}')
+
+  for k, v in dataset.items():
+    if k not in template:
+      _bad_template_error(
+          f'Chunk variable {k!r} not found in template variables '
+          f' {list(template.data_vars)}:'
+      )
+    if v.dtype != template[k].dtype:
+      _bad_template_error(
+          f'Chunk variable {k!r} has dtype {v.dtype} which does not match'
+          f' template variable dtype {template[k].dtype}:'
+      )
+    if v.dims != template[k].dims:
+      _bad_template_error(
+          f'Chunk variable {k!r} has dims {v.dims} which does not match'
+          f' template variable dims {template[k].dims}:'
+      )
+
+  for dim, size in dataset.sizes.items():
+    if dim not in chunks:
+      raise ValueError(
+          _with_dataset(
+              f'Dataset dimension {dim!r} not found in chunks {chunks}:'
+          )
+      )
+    offset = key.offsets[dim]
+    if offset % chunks[dim] != 0:
+      raise ValueError(
+          _with_dataset(
+              f'Chunk offset {offset} is not aligned with chunk '
+              f'size {chunks[dim]} for dimension {dim!r}:'
+          )
+      )
+    if offset + size > template.sizes[dim]:
+      _bad_template_error(
+          f'Chunk dimension {dim!r} has size {size} which is larger than the '
+          f'remaining size {template.sizes[dim] - offset} in the '
+          'template:'
+      )
+    is_last_chunk = offset + chunks[dim] > template.sizes[dim]
+    if is_last_chunk:
+      expected_size = template.sizes[dim] - offset
+      if size != expected_size:
+        _bad_template_error(
+            f'Chunk dimension {dim!r} is the last chunk, but has size {size} '
+            f'which does not match expected size {expected_size}:'
+        )
+    elif size != chunks[dim]:
+      _bad_template_error(
+          f'Chunk dimension {dim!r} has size {size} which does not match'
+          f' chunk size {chunks[dim]}:'
+      )
+
+  return key, dataset
+
+
 def _apply_to_each_chunk(
     func: Callable[[xarray.Dataset], xarray.Dataset],
     old_chunks: Mapping[str, int],
@@ -302,9 +394,8 @@ class Dataset:
   ):
     """Low level interface for creating a new Dataset, without validation.
 
-    Most users should use the higher level
-    :py:class:`xarray_beam.Dataset.from_xarray` or
-    :py:class:`xarray_beam.Dataset.from_zarr` instead.
+    Unless you're really sure you don't need validation, prefer using
+    :py:class:`xarray_beam.Dataset.from_ptransform`.
 
     Args:
       template: xarray.Dataset describing the structure of this dataset,
@@ -317,9 +408,7 @@ class Dataset:
         this dataset's data.
     """
     self._template = template
-    self._chunks = {
-        k: min(template.sizes[k], v) for k, v in chunks.items()
-    }
+    self._chunks = {k: min(template.sizes[k], v) for k, v in chunks.items()}
     self._split_vars = split_vars
     self._ptransform = ptransform
 
@@ -389,6 +478,62 @@ class Dataset:
         f'Template:   {total_size} ({chunk_count} chunk{plural})\n'
         + textwrap.indent('\n'.join(base.split('\n')[1:]), ' ' * 4)
     )
+
+  @classmethod
+  def from_ptransform(
+      cls,
+      ptransform: beam.PTransform,
+      *,
+      template: xarray.Dataset,
+      chunks: Mapping[str | types.EllipsisType, int],
+      split_vars: bool = False,
+  ) -> Dataset:
+    """Create an xarray_beam.Dataset from a Beam PTransform.
+
+    This is an advanced constructor that allows you to create an
+    ``xarray_beam.Dataset`` from an existing Beam PTransform that produces
+    ``(Key, xarray.Dataset)`` pairs.
+
+    The PTransform should produce chunks that conform to the given ``template``,
+    ``chunks``, and ``split_vars`` arguments. This constructor will add a
+    validation step to the PTransform to normalize keys into the strictest
+    possible form based on the other arguments, and ensure that transform
+    outputs are valid.
+
+    Args:
+      ptransform: A Beam PTransform that yields ``(Key, xarray.Dataset)`` pairs.
+        You only need to set ``offsets`` on these keys, ``vars`` will be
+        automatically set based on the dataset if ``split_vars`` is True.
+      template: An ``xarray.Dataset`` object representing the schema
+        (coordinates, dimensions, data variables, and attributes) of the full
+        dataset, as produced by :py:func:`xarray_beam.make_template`, with data
+        variables backed by Dask arrays.
+      chunks: A dictionary mapping dimension names to integer chunk sizes. Every
+        chunk produced by ``ptransform`` must have dimensions of these sizes,
+        except for the last chunk in each dimension, which may be smaller.
+      split_vars: A boolean indicating whether the chunks in ``ptransform`` are
+        split across variables, or if each chunk contains all variables.
+
+    Returns:
+      An ``xarray_beam.Dataset`` instance wrapping the PTransform.
+    """
+    if not isinstance(chunks, Mapping):
+      raise TypeError(
+          f'chunks must be a mapping for from_ptransform, got {chunks}'
+      )
+    for v in chunks.values():
+      if not isinstance(v, int):
+        raise TypeError(
+            'chunks must be a mapping with integer values for from_ptransform,'
+            f' got {chunks}'
+        )
+    chunks = normalize_chunks(chunks, template)
+    ptransform = ptransform | _get_label("validate") >> beam.MapTuple(
+        functools.partial(
+            _normalize_and_validate_chunk, template, chunks, split_vars
+        )
+    )
+    return cls(template, chunks, split_vars, ptransform)
 
   @classmethod
   def from_xarray(
