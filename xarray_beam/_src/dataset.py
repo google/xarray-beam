@@ -880,8 +880,13 @@ class Dataset:
     )
     chunks = {k: v for k, v in self.chunks.items() if k not in dims}
     label = _get_label(f"mean_{'_'.join(dims)}")
+    pre_aggregate = math.prod(self.chunks[d] for d in dims) > 1
     ptransform = self.ptransform | label >> combiners.Mean(
-        dim=dims, skipna=skipna, dtype=dtype, fanout=fanout
+        dim=dims,
+        skipna=skipna,
+        dtype=dtype,
+        fanout=fanout,
+        pre_aggregate=pre_aggregate,
     )
     return type(self)(template, chunks, self.split_vars, ptransform)
 

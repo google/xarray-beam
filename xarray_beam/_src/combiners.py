@@ -13,13 +13,13 @@
 # limitations under the License.
 """Combiners for xarray-beam."""
 from __future__ import annotations
+
 from collections.abc import Sequence
 import dataclasses
 
 import apache_beam as beam
 import numpy.typing as npt
 import xarray
-
 from xarray_beam._src import core
 
 
@@ -30,28 +30,25 @@ DimLike = str | Sequence[str] | None
 
 
 @dataclasses.dataclass
-class MeanCombineFn(beam.transforms.CombineFn):
-  """CombineFn for computing an arithmetic mean of xarray.Dataset objects."""
+class _SumAndCount:
+  """Calculate the sum and count of an xarray.Dataset."""
 
   dim: DimLike = None
   skipna: bool = True
   dtype: npt.DTypeLike | None = None
 
-  def create_accumulator(self):
-    return (0, 0)
-
-  def add_input(self, sum_count, element):
-    (sum_, count) = sum_count
-
+  def __call__(
+      self, chunk: xarray.Dataset
+  ) -> tuple[xarray.Dataset, xarray.Dataset]:
     if self.dtype is not None:
-      element = element.astype(self.dtype)
+      chunk = chunk.astype(self.dtype)
 
     if self.skipna:
-      sum_increment = element.fillna(0)
-      count_increment = element.notnull()
+      sum_increment = chunk.fillna(0)
+      count_increment = chunk.notnull()
     else:
-      sum_increment = element
-      count_increment = xarray.ones_like(element)
+      sum_increment = chunk
+      count_increment = xarray.ones_like(chunk)
 
     if self.dim is not None:
       # unconditionally set skipna=False because we already explictly fill in
@@ -59,9 +56,26 @@ class MeanCombineFn(beam.transforms.CombineFn):
       sum_increment = sum_increment.sum(self.dim, skipna=False)
       count_increment = count_increment.sum(self.dim)
 
+    return sum_increment, count_increment
+
+
+@dataclasses.dataclass
+class MeanCombineFn(beam.transforms.CombineFn):
+  """CombineFn for computing an arithmetic mean of xarray.Dataset objects."""
+
+  sum_and_count: _SumAndCount | None = None
+
+  def create_accumulator(self):
+    return (0, 0)
+
+  def add_input(self, sum_count, element):
+    (sum_, count) = sum_count
+    if self.sum_and_count is not None:
+      sum_increment, count_increment = self.sum_and_count(element)
+    else:
+      sum_increment, count_increment = element
     new_sum = sum_ + sum_increment
     new_count = count + count_increment
-
     return new_sum, new_count
 
   def merge_accumulators(self, accumulators):
@@ -72,18 +86,30 @@ class MeanCombineFn(beam.transforms.CombineFn):
     (sum_, count) = sum_count
     return sum_ / count
 
-  def for_input_type(self, input_type):
-    return self
-
 
 @dataclasses.dataclass
 class Mean(beam.PTransform):
-  """Calculate the mean over one or more distributed dataset dimensions."""
+  """Calculate the mean over one or more distributed dataset dimensions.
+
+  This PTransform expects a PCollection of `(key, chunk)` pairs, and outputs a
+  PCollection where chunks with the same key (excluding dimensions in `dim`)
+  have been averaged together.
+
+  Args:
+    dim: Dimension(s) to average over.
+    skipna: If True, skip missing values (NaN) when calculating the mean.
+    dtype: Data type to use for sum and count accumulators.
+    fanout: If provided, use `CombinePerKey.with_hot_key_fanout` to handle hot
+      keys by injecting intermediate merging nodes.
+    pre_aggregate: If True, calculate sum and count for each chunk before
+      combining. This is usually more efficient.
+  """
 
   dim: str | Sequence[str]
   skipna: bool = True
   dtype: npt.DTypeLike | None = None
   fanout: int | None = None
+  pre_aggregate: bool = True
 
   def _update_key(
       self, key: core.Key, chunk: xarray.Dataset
@@ -96,7 +122,9 @@ class Mean(beam.PTransform):
     return (
         pcoll
         | beam.MapTuple(self._update_key)
-        | Mean.PerKey(self.dim, self.skipna, self.dtype, self.fanout)
+        | Mean.PerKey(
+            self.dim, self.skipna, self.dtype, self.fanout, self.pre_aggregate
+        )
     )
 
   @dataclasses.dataclass
@@ -107,9 +135,15 @@ class Mean(beam.PTransform):
     skipna: bool = True
     dtype: npt.DTypeLike | None = None
     fanout: int | None = None
+    pre_aggregate: bool = True
 
     def expand(self, pcoll):
-      combine_fn = MeanCombineFn(self.dim, self.skipna, self.dtype)
+      sum_and_count = _SumAndCount(self.dim, self.skipna, self.dtype)
+      if self.pre_aggregate:
+        pcoll = pcoll | beam.Map(sum_and_count)
+        combine_fn = MeanCombineFn(sum_and_count=None)
+      else:
+        combine_fn = MeanCombineFn(sum_and_count)
       return pcoll | beam.CombineGlobally(combine_fn).with_fanout(self.fanout)
 
   @dataclasses.dataclass
@@ -120,9 +154,15 @@ class Mean(beam.PTransform):
     skipna: bool = True
     dtype: npt.DTypeLike | None = None
     fanout: int | None = None
+    pre_aggregate: bool = True
 
     def expand(self, pcoll):
-      combine_fn = MeanCombineFn(self.dim, self.skipna, self.dtype)
+      sum_and_count = _SumAndCount(self.dim, self.skipna, self.dtype)
+      if self.pre_aggregate:
+        pcoll = pcoll | beam.MapTuple(lambda k, v: (k, sum_and_count(v)))
+        combine_fn = MeanCombineFn(sum_and_count=None)
+      else:
+        combine_fn = MeanCombineFn(sum_and_count)
       return pcoll | beam.CombinePerKey(combine_fn).with_hot_key_fanout(
           self.fanout
       )
