@@ -438,6 +438,15 @@ class Dataset:
     return dict(self.template.sizes)  # pytype: disable=bad-return-type
 
   @property
+  def itemsize(self) -> int:
+    """Total size of dtype itemsizes in an PTransform element, in bytes."""
+    if self.split_vars:
+      itemsize = max(v.dtype.itemsize for v in self.template.values())
+    else:
+      itemsize = sum(v.dtype.itemsize for v in self.template.values())
+    return itemsize
+
+  @property
   def bytes_per_chunk(self) -> int:
     """Estimate of the number of bytes per dataset chunk."""
     variable_sizes = [
@@ -528,7 +537,7 @@ class Dataset:
             f' got {chunks}'
         )
     chunks = normalize_chunks(chunks, template)
-    ptransform = ptransform | _get_label("validate") >> beam.MapTuple(
+    ptransform = ptransform | _get_label('validate') >> beam.MapTuple(
         functools.partial(
             _normalize_and_validate_chunk, template, chunks, split_vars
         )
@@ -556,6 +565,8 @@ class Dataset:
         with ``normalize_chunks()``.
     """
     template = zarr.make_template(source)
+    if previous_chunks is None:
+      previous_chunks = source.sizes
     chunks = normalize_chunks(chunks, template, split_vars, previous_chunks)
     ptransform = core.DatasetToChunks(source, chunks, split_vars)
     ptransform.label = _get_label('from_xarray')
@@ -817,15 +828,11 @@ class Dataset:
       ptransform.label = _concat_labels(self.ptransform.label, label)
     else:
       # Need to do a full rechunking.
-      if self.split_vars:
-        itemsize = max(v.dtype.itemsize for v in self.template.values())
-      else:
-        itemsize = sum(v.dtype.itemsize for v in self.template.values())
       rechunk_transform = rechunk.Rechunk(
           self.sizes,
           self.chunks,
           chunks,
-          itemsize=itemsize,
+          itemsize=self.itemsize,
           min_mem=min_mem,
           max_mem=max_mem,
       )
@@ -850,25 +857,22 @@ class Dataset:
       self,
       dim: str | list[str] | tuple[str, ...] | None = None,
       *,
-      skipna: bool | None = None,
+      skipna: bool = True,
       dtype: npt.DTypeLike | None = None,
-      fanout: int | None = None,
   ) -> Dataset:
     """Compute the mean of this Dataset using Beam combiners.
 
-    This can be significantly faster than using rechunking, but good
-    performance may require tuning ``fanout``.
+    This can be significantly faster and more memory efficient than using
+    rechunking.
 
     Args:
       dim: dimension(s) to compute the mean over.
       skipna: whether to skip missing data when computing the mean.
       dtype: the desired dtype of the resulting Dataset.
-      fanout: size of an intermediate fanout stage for Beam combiners.
 
     Returns:
       New Dataset with the mean computed.
     """
-    # TODO(shoyer): use heuristics to pick a default fanout size.
     if dim is None:
       dims = list(self.template.dims)
     elif isinstance(dim, str):
@@ -878,17 +882,21 @@ class Dataset:
     template = zarr.make_template(
         self.template.mean(dim=dims, skipna=skipna, dtype=dtype)
     )
-    chunks = {k: v for k, v in self.chunks.items() if k not in dims}
+    new_chunks = {k: v for k, v in self.chunks.items() if k not in dims}
     label = _get_label(f"mean_{'_'.join(dims)}")
-    pre_aggregate = math.prod(self.chunks[d] for d in dims) > 1
-    ptransform = self.ptransform | label >> combiners.Mean(
-        dim=dims,
-        skipna=skipna,
-        dtype=dtype,
-        fanout=fanout,
-        pre_aggregate=pre_aggregate,
+    ptransform = (
+        self.ptransform
+        | label
+        >> combiners.MultiStageMean(
+            dims=dims,
+            skipna=skipna,
+            dtype=dtype,
+            chunks=self.chunks,
+            sizes=self.sizes,
+            itemsize=self.itemsize,
+        )
     )
-    return type(self)(template, chunks, self.split_vars, ptransform)
+    return type(self)(template, new_chunks, self.split_vars, ptransform)
 
   _head = _whole_dataset_method('head')
 

@@ -18,11 +18,192 @@ from absl.testing import parameterized
 import numpy as np
 import xarray
 import xarray_beam as xbeam
+from xarray_beam._src import combiners
 from xarray_beam._src import test_util
 
 
 # pylint: disable=expression-not-assigned
 # pylint: disable=pointless-statement
+
+
+class GetChunkIndexTest(test_util.TestCase):
+
+  def test_1d(self):
+    dims = ['x']
+    chunks = {'x': 2}
+    sizes = {'x': 8}
+    keys = [xbeam.Key({'x': i}) for i in [0, 2, 4, 6]]
+    expected_list = [0, 1, 2, 3]
+    actual_list = [
+        combiners._get_chunk_index(key, dims, chunks, sizes) for key in keys
+    ]
+    self.assertEqual(actual_list, expected_list)
+
+  def test_2d(self):
+    dims = ['x', 'y']
+    chunks = {'x': 2, 'y': 3}
+    sizes = {'x': 4, 'y': 6}
+    keys = [
+        xbeam.Key({'x': 0, 'y': 0}),
+        xbeam.Key({'x': 0, 'y': 3}),
+        xbeam.Key({'x': 2, 'y': 0}),
+        xbeam.Key({'x': 2, 'y': 3}),
+    ]
+    expected_list = [0, 1, 2, 3]
+    actual_list = [
+        combiners._get_chunk_index(key, dims, chunks, sizes) for key in keys
+    ]
+    self.assertEqual(actual_list, expected_list)
+
+
+class IndexToBinsTest(parameterized.TestCase):
+
+  @parameterized.parameters(
+      {'chunk_index': 0, 'bins_per_stage': (), 'expected': ()},
+      {'chunk_index': 0, 'bins_per_stage': (4,), 'expected': (0,)},
+      {'chunk_index': 1, 'bins_per_stage': (4,), 'expected': (1,)},
+      {'chunk_index': 2, 'bins_per_stage': (4,), 'expected': (2,)},
+      {'chunk_index': 3, 'bins_per_stage': (4,), 'expected': (3,)},
+      {'chunk_index': 0, 'bins_per_stage': (2, 2), 'expected': (0, 0)},
+      {'chunk_index': 1, 'bins_per_stage': (2, 2), 'expected': (1, 0)},
+      {'chunk_index': 2, 'bins_per_stage': (2, 2), 'expected': (0, 1)},
+      {'chunk_index': 3, 'bins_per_stage': (2, 2), 'expected': (1, 1)},
+      {'chunk_index': 55, 'bins_per_stage': (10, 10), 'expected': (5, 5)},
+  )
+  def test_index_to_fanout_bins(self, chunk_index, bins_per_stage, expected):
+    actual = combiners._index_to_fanout_bins(chunk_index, bins_per_stage)
+    self.assertEqual(actual, expected)
+
+
+class OptimalFanoutTest(parameterized.TestCase):
+
+  @parameterized.parameters(
+      {
+          'dims': ['x'],
+          'chunks': {'x': 1_000_000},
+          'sizes': {'x': 1_000_000},
+          'itemsize': 4,
+          'expected': (),
+      },
+      {
+          'dims': ['x'],
+          'chunks': {'x': 10_000},
+          'sizes': {'x': 1_000_000},
+          'itemsize': 4,
+          'expected': (100,),
+      },
+      {
+          'dims': ['x'],
+          'chunks': {'x': 1_000},
+          'sizes': {'x': 1_000_000},
+          'itemsize': 4,
+          'expected': (32, 32),
+      },
+      {
+          'dims': ['time'],
+          'chunks': {'time': 100, 'x': 1000, 'y': 1000},
+          'sizes': {'time': 100_000, 'x': 1000, 'y': 1000},
+          'itemsize': 4,
+          'expected': (4, 4, 4, 4, 4),
+      },
+      {
+          'dims': ['time'],
+          'chunks': {'time': 100, 'y': 1000, 'z': 1000},
+          'sizes': {'time': 500, 'x': 1000, 'y': 1000},
+          'itemsize': 4,
+          'expected': (5,),
+      },
+      {
+          'dims': ['time', 'x', 'y'],
+          'chunks': {'time': 100, 'x': 1000, 'y': 1000},
+          'sizes': {'time': 100_000, 'x': 1000, 'y': 1000},
+          'itemsize': 4,
+          'expected': (32, 32),
+      },
+  )
+  def test_optimal_fanout_bins(self, dims, chunks, sizes, itemsize, expected):
+    actual = combiners._optimal_fanout_bins(dims, chunks, sizes, itemsize)
+    self.assertEqual(actual, expected)
+
+
+class MultiStageMeanTest(test_util.TestCase, parameterized.TestCase):
+
+  @parameterized.named_parameters(
+      ('no_fanout_pre_aggregate', (4,), True),
+      ('no_fanout_no_pre_aggregate', (4,), False),
+      ('with_fanout_pre_aggregate', (2, 2), True),
+      ('with_fanout_no_pre_aggregate', (2, 2), False),
+      ('with_too_big_fanout', (3, 2), None),
+      ('with_three_stages', (1, 2, 2), None),
+  )
+  def test_multi_stage_mean(self, bins_per_stage, pre_aggregate):
+    sizes = {'x': 8}
+    chunks = {'x': 2}
+    inputs = [
+        (
+            xbeam.Key({'x': 0}),
+            xarray.Dataset({'z': ('x', np.array([0.0, 1.0]))}),
+        ),
+        (
+            xbeam.Key({'x': 2}),
+            xarray.Dataset({'z': ('x', np.array([2.0, 3.0]))}),
+        ),
+        (
+            xbeam.Key({'x': 4}),
+            xarray.Dataset({'z': ('x', np.array([4.0, 5.0]))}),
+        ),
+        (
+            xbeam.Key({'x': 6}),
+            xarray.Dataset({'z': ('x', np.array([6.0, 7.0]))}),
+        ),
+    ]
+    transform = combiners.MultiStageMean(
+        dims=['x'],
+        skipna=True,
+        dtype=None,
+        chunks=chunks,
+        sizes=sizes,
+        itemsize=8,
+        bins_per_stage=bins_per_stage,
+        pre_aggregate=pre_aggregate,
+    )
+    expected = [(xbeam.Key({}), xarray.Dataset({'z': 3.5}))]
+    actual = inputs | transform
+    self.assertAllCloseChunks(actual, expected)
+
+  def test_multi_stage_mean_no_combiner(self):
+    sizes = {'x': 2, 'y': 2}
+    chunks = {'x': 2, 'y': 2}
+    inputs = [
+        (
+            xbeam.Key({'x': 0, 'y': 0}),
+            xarray.Dataset({'z': (('x', 'y'), np.array([[0.0, 1.0]]))}),
+        ),
+        (
+            xbeam.Key({'x': 1, 'y': 0}),
+            xarray.Dataset({'z': (('x', 'y'), np.array([[2.0, 3.0]]))}),
+        ),
+    ]
+    transform = combiners.MultiStageMean(
+        dims=['y'],
+        skipna=True,
+        dtype=None,
+        chunks=chunks,
+        sizes=sizes,
+        itemsize=8,
+    )
+    expected = [
+        (
+            xbeam.Key({'x': 0}),
+            xarray.Dataset({'z': (('x',), np.array([0.5]))}),
+        ),
+        (
+            xbeam.Key({'x': 1}),
+            xarray.Dataset({'z': (('x',), np.array([2.5]))}),
+        ),
+    ]
+    actual = inputs | transform
+    self.assertAllCloseChunks(actual, expected)
 
 
 class MeanTest(test_util.TestCase):

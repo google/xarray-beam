@@ -547,6 +547,7 @@ class DatasetTest(test_util.TestCase):
     self.assertEqual(beam_ds.template.keys(), {'foo'})
     self.assertEqual(beam_ds.chunks, {'x': 5})
     self.assertFalse(beam_ds.split_vars)
+    self.assertEqual(beam_ds.itemsize, 8)
     self.assertEqual(beam_ds.bytes_per_chunk, 40)
     self.assertEqual(beam_ds.chunk_count, 2)
     self.assertRegex(beam_ds.ptransform.label, r'^from_xarray_\d+$')
@@ -566,6 +567,16 @@ class DatasetTest(test_util.TestCase):
     ds = xarray.Dataset({'foo': ('x', np.arange(10))})
     beam_ds = xbeam.Dataset.from_xarray(ds, chunks=-1)
     self.assertEqual(beam_ds.chunks, {'x': 10})
+
+  def test_from_xarray_partial_chunks(self):
+    ds = xarray.Dataset({'foo': (('x', 'y'), np.arange(100).reshape(10, 10))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5})
+    expected = [
+        (xbeam.Key({'x': 0, 'y': 0}), ds.head(x=5)),
+        (xbeam.Key({'x': 5, 'y': 0}), ds.tail(x=5)),
+    ]
+    actual = test_util.EagerPipeline() | beam_ds.ptransform
+    self.assertIdenticalChunks(expected, actual)
 
   def test_collect_with_direct_runner(self):
     ds = xarray.Dataset({'foo': ('x', np.arange(10))})
@@ -1140,22 +1151,45 @@ class EndToEndTest(test_util.TestCase):
 class MeanTest(test_util.TestCase):
 
   @parameterized.named_parameters(
-      dict(testcase_name='x', dim='x', skipna=True, fanout=None),
-      dict(testcase_name='y', dim='y', skipna=True, fanout=None),
-      dict(testcase_name='two_dims', dim=['x', 'y'], skipna=True, fanout=None),
-      dict(testcase_name='all_dims', dim=None, skipna=True, fanout=None),
-      dict(testcase_name='skipna_false', dim='y', skipna=False, fanout=None),
-      dict(testcase_name='with_fanout', dim='y', skipna=True, fanout=2),
+      dict(testcase_name='x', dim='x', skipna=True),
+      dict(testcase_name='y', dim='y', skipna=True),
+      dict(testcase_name='two_dims', dim=['x', 'y'], skipna=True),
+      dict(testcase_name='all_dims', dim=None, skipna=True),
+      dict(testcase_name='skipna_false', dim='y', skipna=False),
   )
-  def test_mean(self, dim, skipna, fanout):
+  def test_mean(self, dim, skipna):
     source_ds = xarray.Dataset(
         {'foo': (('x', 'y'), np.array([[1, 2, np.nan], [4, np.nan, 6]]))}
     )
     beam_ds = xbeam.Dataset.from_xarray(source_ds, chunks={'x': 1})
-    actual = beam_ds.mean(dim=dim, skipna=skipna, fanout=fanout)
+    actual = beam_ds.mean(dim=dim, skipna=skipna)
     expected = source_ds.mean(dim=dim, skipna=skipna)
     actual_collected = actual.collect_with_direct_runner()
-    xarray.testing.assert_identical(expected, actual_collected)
+    xarray.testing.assert_allclose(expected, actual_collected)
+
+  def test_mean_large_array_cases(self):
+    source_ds = xarray.Dataset(
+        {'foo': (('x', 'y'), np.arange(1000_000).reshape(1000, 1000))}
+    )
+    beam_ds = xbeam.Dataset.from_xarray(source_ds, chunks={'x': 100, 'y': 1000})
+
+    with self.subTest('dim=y'):
+      actual = beam_ds.mean(dim='y')
+      expected = source_ds.mean(dim='y')
+      actual_collected = actual.collect_with_direct_runner()
+      xarray.testing.assert_allclose(expected, actual_collected)
+
+    with self.subTest('dim=x'):
+      actual = beam_ds.mean(dim='x')
+      expected = source_ds.mean(dim='x')
+      actual_collected = actual.collect_with_direct_runner()
+      xarray.testing.assert_allclose(expected, actual_collected)
+
+    with self.subTest('dim=[x,y]'):
+      actual = beam_ds.mean(dim=['x', 'y'])
+      expected = source_ds.mean(dim=['x', 'y'])
+      actual_collected = actual.collect_with_direct_runner()
+      xarray.testing.assert_allclose(expected, actual_collected)
 
 
 if __name__ == '__main__':
