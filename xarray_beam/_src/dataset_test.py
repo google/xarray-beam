@@ -1017,7 +1017,7 @@ class RechunkingTest(test_util.TestCase):
     actual = rechunked_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, source)
 
-  def test_rechunk_split_vars(self):
+  def test_rechunk_with_existing_split_vars(self):
     source = xarray.Dataset({
         'foo': (('x', 'y'), np.arange(20).reshape(10, 2)),
         'bar': ('x', np.arange(10)),
@@ -1027,6 +1027,29 @@ class RechunkingTest(test_util.TestCase):
     )
     rechunked_ds = beam_ds.rechunk({'x': 2, 'y': 1})
     self.assertEqual(rechunked_ds.chunks, {'x': 2, 'y': 1})
+    actual = rechunked_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(actual, source)
+
+  @parameterized.product(
+      load_split=[False, True],
+      target_split=[False, True],
+      insert_intermediate=[False, True],
+  )
+  def test_rechunk_and_split(
+      self, load_split, target_split, insert_intermediate
+  ):
+    source = xarray.Dataset({
+        'foo': (('x', 'y'), np.arange(20).reshape(4, 5)),
+        'bar': (('x', 'y'), -np.arange(20).reshape(4, 5)),
+    })
+    beam_ds = xbeam.Dataset.from_xarray(
+        source, {'x': 5, 'y': 2}, split_vars=load_split
+    )
+    if insert_intermediate:
+      beam_ds = beam_ds.map_blocks(lambda ds: ds)
+    rechunked_ds = beam_ds.rechunk({'x': 2, 'y': 1}, split_vars=target_split)
+    self.assertEqual(rechunked_ds.chunks, {'x': 2, 'y': 1})
+    self.assertEqual(rechunked_ds.split_vars, target_split)
     actual = rechunked_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, source)
 

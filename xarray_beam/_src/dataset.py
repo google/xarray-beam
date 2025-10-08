@@ -792,6 +792,7 @@ class Dataset:
   def rechunk(
       self,
       chunks: UnnormalizedChunks,
+      split_vars: bool | None = None,
       min_mem: int | None = None,
       max_mem: int = 2**30,
   ) -> Dataset:
@@ -801,18 +802,24 @@ class Dataset:
       chunks: new chunk sizes, either a dict mapping from dimension name to
         chunk size, or any value that can be passed to
         :py:func:`xarray_beam.normalize_chunks`.
+      split_vars: whether variables should be split across chunks in the
+        ptransform, or all stored in the same chunks. By default, the current
+        value of ``split_vars`` is preserved.
       min_mem: optional minimum memory usage for an intermediate chunk in
         rechunking. Defaults to ``max_mem/100``.
-      max_mem: optional maximum memory usage ffor an intermediate chunk in
+      max_mem: optional maximum memory usage for an intermediate chunk in
         rechunking. Defaults to 1GB.
 
     Returns:
       New Dataset with updated chunks.
     """
+    if split_vars is None:
+      split_vars = self.split_vars
+
     chunks = normalize_chunks(
         chunks,
         self.template,
-        split_vars=self.split_vars,
+        split_vars=split_vars,
         previous_chunks=self.chunks,
     )
     label = _get_label('rechunk')
@@ -823,24 +830,34 @@ class Dataset:
       # Rechunking can be performed by re-reading the source dataset with new
       # chunks, rather than using a separate rechunking transform.
       ptransform = core.DatasetToChunks(
-          self.ptransform.dataset, chunks, self.split_vars
+          self.ptransform.dataset, chunks, split_vars
       )
       ptransform.label = _concat_labels(self.ptransform.label, label)
-    else:
-      # Need to do a full rechunking.
-      rechunk_transform = rechunk.Rechunk(
-          self.sizes,
-          self.chunks,
-          chunks,
-          itemsize=self.itemsize,
-          min_mem=min_mem,
-          max_mem=max_mem,
-      )
-      ptransform = self.ptransform | label >> rechunk_transform
-    return type(self)(self.template, chunks, self.split_vars, ptransform)
+      return type(self)(self.template, chunks, split_vars, ptransform)
+
+    # Need to do a full rechunking.
+    # If also splitting variables, do that first because smaller itemsize allows
+    # much for flexiblity for rechunking. If consolidating, do that afterwards.
+    prechunked = self.split_variables() if split_vars else self
+    rechunk_transform = rechunk.Rechunk(
+        prechunked.sizes,
+        prechunked.chunks,
+        chunks,
+        itemsize=prechunked.itemsize,
+        min_mem=min_mem,
+        max_mem=max_mem,
+    )
+    ptransform = prechunked.ptransform | label >> rechunk_transform
+    rechunked = type(self)(
+        self.template, chunks, prechunked.split_vars, ptransform
+    )
+    result = rechunked if split_vars else rechunked.consolidate_variables()
+    return result
 
   def split_variables(self) -> Dataset:
     """Split variables in this Dataset into separate chunks."""
+    if self.split_vars:
+      return self
     split_vars = True
     label = _get_label('split_vars')
     ptransform = self.ptransform | label >> rechunk.SplitVariables()
@@ -848,6 +865,8 @@ class Dataset:
 
   def consolidate_variables(self) -> Dataset:
     """Consolidate variables in this Dataset into a single chunk."""
+    if not self.split_vars:
+      return self
     split_vars = False
     label = _get_label('consolidate_vars')
     ptransform = self.ptransform | label >> rechunk.ConsolidateVariables()
@@ -884,17 +903,13 @@ class Dataset:
     )
     new_chunks = {k: v for k, v in self.chunks.items() if k not in dims}
     label = _get_label(f"mean_{'_'.join(dims)}")
-    ptransform = (
-        self.ptransform
-        | label
-        >> combiners.MultiStageMean(
-            dims=dims,
-            skipna=skipna,
-            dtype=dtype,
-            chunks=self.chunks,
-            sizes=self.sizes,
-            itemsize=self.itemsize,
-        )
+    ptransform = self.ptransform | label >> combiners.MultiStageMean(
+        dims=dims,
+        skipna=skipna,
+        dtype=dtype,
+        chunks=self.chunks,
+        sizes=self.sizes,
+        itemsize=self.itemsize,
     )
     return type(self)(template, new_chunks, self.split_vars, ptransform)
 
