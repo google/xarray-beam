@@ -16,16 +16,19 @@ from __future__ import annotations
 
 import collections
 from collections.abc import Mapping, Set
+import concurrent.futures
 import dataclasses
 import logging
 import os
 import pprint
-from typing import Any, TypeVar
+import tempfile
+from typing import Any
 import warnings
 
 import apache_beam as beam
 import dask
 import dask.array
+import fsspec
 import numpy as np
 import pandas as pd
 import xarray
@@ -33,6 +36,7 @@ from xarray_beam._src import core
 from xarray_beam._src import rechunk
 from xarray_beam._src import threadmap
 from zarr import storage as zarr_storage
+
 
 # pylint: disable=logging-fstring-interpolation
 
@@ -366,6 +370,22 @@ def _get_chunk_and_shard_encoding(
   return encoding
 
 
+def _copy_zarr_store_with_fsspec(
+    source_dir: str, dest_store: str | os.PathLike[str], num_threads: int = 128
+) -> None:
+  """Copy a Zarr store from one location to another using fsspec."""
+  source_mapper = fsspec.get_mapper(source_dir)
+  dest_mapper = fsspec.get_mapper(dest_store)
+
+  def copy_item(key):
+    dest_mapper[key] = source_mapper[key]
+
+  with concurrent.futures.ThreadPoolExecutor(
+      max_workers=num_threads
+  ) as executor:
+    list(executor.map(copy_item, source_mapper))
+
+
 def _setup_zarr(
     template: xarray.Dataset,
     store: WritableStore,
@@ -373,6 +393,8 @@ def _setup_zarr(
     zarr_shards: Mapping[str, int] | None = None,
     zarr_format: int | None = None,
     encoding: Mapping[str, Any] | None = None,
+    *,
+    stage_locally: bool | None = None,
 ) -> None:
   """setup_zarr() without finalizing args."""
   if encoding is None:
@@ -401,14 +423,39 @@ def _setup_zarr(
       f'writing Zarr metadata for template:\n{template}\n'
       f'encoding={encoding_str}'
   )
-  template.to_zarr(
-      store,
-      compute=False,
-      consolidated=True,
-      mode='w',
-      zarr_format=zarr_format,
-      encoding=encoding,
-  )
+  if stage_locally is None:
+    stage_locally = isinstance(store, (str, os.PathLike))
+    if not stage_locally:
+      logging.info(
+          'skipping local staging, because store is not a string or PathLike'
+      )
+
+  if stage_locally:
+    if not isinstance(store, (str, os.PathLike)):
+      raise ValueError(
+          'only path-like stores are supported when stage_locally=True'
+      )
+    with tempfile.TemporaryDirectory() as tmpdir:
+      logging.info(f'writing temporary copy to {tmpdir}')
+      template.to_zarr(
+          tmpdir,
+          compute=False,
+          consolidated=True,
+          mode='w',
+          zarr_format=zarr_format,
+          encoding=encoding,
+      )
+      logging.info(f'copying temporary copy to {store}')
+      _copy_zarr_store_with_fsspec(tmpdir, store)
+  else:
+    template.to_zarr(
+        store,
+        compute=False,
+        consolidated=True,
+        mode='w',
+        zarr_format=zarr_format,
+        encoding=encoding,
+    )
   logging.info('finished setting up Zarr')
 
 
@@ -419,6 +466,8 @@ def setup_zarr(
     zarr_shards: Mapping[str, int] | None = None,
     zarr_format: int | None = None,
     encoding: Mapping[str, Any] | None = None,
+    *,
+    stage_locally: bool | None = None,
 ) -> None:
   """Setup a Zarr store.
 
@@ -441,14 +490,25 @@ def setup_zarr(
       possible, otherwise defaulting to the default version used by the
       zarr-python library installed.
     encoding: Nested dictionary with variable names as keys and dictionaries of
-      variable specific encodings as values, e.g.,
-      ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
+      variable specific encodings as values, e.g., ``{"my_variable": {"dtype":
+      "int16", "scale_factor": 0.1,}, ...}``
+    stage_locally: If True, write Zarr metadata to a local temporary directory
+      before copying to `store` in parallel. This can significantly speed up
+      setup on high-latency filesystems. By default, uses local staging if
+      possible, which is true as long as `store` is provided as as string or
+      path.
   """
   template, zarr_chunks, zarr_shards = _finalize_setup_zarr_args(
       template, zarr_chunks, zarr_shards
   )
   _setup_zarr(
-      template, store, zarr_chunks, zarr_shards, zarr_format, encoding
+      template,
+      store,
+      zarr_chunks,
+      zarr_shards,
+      zarr_format,
+      encoding,
+      stage_locally=stage_locally,
   )
 
 
@@ -584,6 +644,7 @@ class ChunksToZarr(beam.PTransform):
       num_threads: int | None = None,
       needs_setup: bool = True,
       encoding: Mapping[str, Any] | None = None,
+      stage_locally: bool | None = None,
   ):
     # pyformat: disable
     """Initialize ChunksToZarr.
@@ -642,6 +703,11 @@ class ChunksToZarr(beam.PTransform):
       encoding : Nested dictionary with variable names as keys and dictionaries
         of variable specific encodings as values, e.g.,
         ``{"my_variable": {"dtype": "int16", "scale_factor": 0.1,}, ...}``
+      stage_locally: If True, write Zarr metadata to a local temporary directory
+        before copying to `store` in parallel. This can significantly speed up
+        setup on high-latency filesystems. By default, uses local staging if
+        possible, which is true as long as `store` is provided as as string or
+        path.
     """
     # pyformat: enable
 
@@ -653,7 +719,13 @@ class ChunksToZarr(beam.PTransform):
       )
       if needs_setup:
         _setup_zarr(
-            template, store, zarr_chunks, zarr_shards, zarr_format, encoding
+            template,
+            store,
+            zarr_chunks,
+            zarr_shards,
+            zarr_format,
+            encoding,
+            stage_locally=stage_locally,
         )
     elif isinstance(template, beam.pvalue.AsSingleton):
       if not needs_setup:
@@ -685,6 +757,7 @@ class ChunksToZarr(beam.PTransform):
     self.num_threads = num_threads
     self.zarr_format = zarr_format
     self.encoding = encoding
+    self.stage_locally = stage_locally
 
   def _validate_zarr_chunk(self, key, chunk, template=None):
     # If template doesn't have a default value, Beam errors with "Side inputs
@@ -716,12 +789,15 @@ class ChunksToZarr(beam.PTransform):
           template.pvalue
           | 'SetupZarr'
           >> beam.Map(
-              setup_zarr,
-              self.store,
-              self.zarr_chunks,
-              self.zarr_shards,
-              self.zarr_format,
-              self.encoding,
+              lambda t: setup_zarr(
+                  t,
+                  self.store,
+                  self.zarr_chunks,
+                  self.zarr_shards,
+                  self.zarr_format,
+                  self.encoding,
+                  stage_locally=self.stage_locally,
+              )
           )
       )
     return (

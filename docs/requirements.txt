@@ -10,6 +10,7 @@ matplotlib==3.10.6
 # xarray-beam requirements
 apache-beam==2.67.0
 dask==2025.9.1
+fsspec==2025.9.0
 immutabledict==4.2.1
 numpy==2.2.6
 pandas==2.3.2

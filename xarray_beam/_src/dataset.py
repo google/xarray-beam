@@ -622,6 +622,7 @@ class Dataset:
       zarr_chunks: UnnormalizedChunks | None = None,
       zarr_shards: UnnormalizedChunks | None = None,
       zarr_format: int | None = None,
+      stage_locally: bool | None = None,
   ) -> beam.PTransform:
     """Write this dataset to a Zarr file.
 
@@ -650,6 +651,11 @@ class Dataset:
       zarr_format: optional integer specifying the explicit Zarr format to use.
         Defaults to Zarr v3 if using shards, or the default format for your
         installed version of Zarr.
+      stage_locally: If True, write Zarr metadata to a local temporary directory
+        before copying to `store` in parallel. This can significantly speed up
+        setup on high-latency filesystems. By default, uses local staging if
+        possible, which is true as long as `store` is provided as as string or
+        path.
 
     Returns:
       Beam PTransform that writes the dataset to a Zarr file.
@@ -710,6 +716,7 @@ class Dataset:
         zarr_chunks=zarr_chunks,
         zarr_shards=zarr_shards,
         zarr_format=zarr_format,
+        stage_locally=stage_locally,
     )
 
   def collect_with_direct_runner(self) -> xarray.Dataset:
