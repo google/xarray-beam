@@ -15,10 +15,10 @@ authors = [
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
-# TODO(shoyer): thin these down
 dependencies = [
     "apache_beam>=2.31.0",
     "dask",
+    "fsspec",
     "immutabledict",
     "zarr",
     "xarray",

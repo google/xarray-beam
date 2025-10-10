@@ -206,6 +206,11 @@ class DatasetToZarrTest(test_util.TestCase):
       inputs | xbeam.ChunksToZarr(temp_dir, chunked)
       result = xarray.open_zarr(temp_dir, consolidated=True)
       xarray.testing.assert_identical(dataset, result)
+    with self.subTest('with template and stage_locally=True'):
+      temp_dir = self.create_tempdir().full_path
+      inputs | xbeam.ChunksToZarr(temp_dir, chunked, stage_locally=True)
+      result = xarray.open_zarr(temp_dir, consolidated=True)
+      xarray.testing.assert_identical(dataset, result)
     with self.subTest('with template and needs_setup=False'):
       temp_dir = self.create_tempdir().full_path
       xbeam.setup_zarr(chunked, temp_dir)
@@ -426,6 +431,30 @@ class DatasetToZarrTest(test_util.TestCase):
           zarr_shards={'x': 1, 'y': 1},
           zarr_format=3,
       )
+
+  @parameterized.product(
+      stage_locally=[True, False, None],
+      zarr_format=[2, 3, None],
+  )
+  def test_setup_zarr(self, stage_locally, zarr_format):
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(0, 60, 10))},
+        coords={'x': np.arange(6)},
+    )
+    template = xbeam.make_template(dataset)
+    temp_dir = self.create_tempdir().full_path
+    xbeam.setup_zarr(
+        template,
+        temp_dir,
+        zarr_chunks={'x': 3},
+        stage_locally=stage_locally,
+        zarr_format=zarr_format,
+    )
+    # Verify we can open it with Xarray and it has the right structure.
+    ds = xarray.open_zarr(temp_dir)
+    self.assertEqual(ds.sizes, template.sizes)
+    self.assertEqual(ds.chunks, {'x': (3, 3)})
+    xarray.testing.assert_equal(ds.coords['x'], template.coords['x'])
 
   def test_chunks_to_zarr_append(self):
     zarr_chunks = {'t': 1, 'x': 5}
