@@ -618,7 +618,9 @@ class Dataset:
       self,
       path: str,
       *,
-      zarr_chunks_per_shard: Mapping[str, int] | None = None,
+      zarr_chunks_per_shard: (
+          Mapping[str | types.EllipsisType, int] | None
+      ) = None,
       zarr_chunks: UnnormalizedChunks | None = None,
       zarr_shards: UnnormalizedChunks | None = None,
       zarr_format: int | None = None,
@@ -640,6 +642,9 @@ class Dataset:
       path: path to write to.
       zarr_chunks_per_shard: If provided, write this dataset into Zarr shards,
         each with at most this many Zarr chunks per shard (requires Zarr v3).
+        Dimensions not included in ``zarr_chunks_per_shard`` default to 1 chunk
+        per shard, unless a dict key of ellipsis (...) is used to indicate a
+        different default.
       zarr_chunks: Explicit chunk sizes to use for storing data in Zarr, as an
         alternative to specifying ``zarr_chunks_per_shard``. Zarr chunk sizes
         must evenly divide the existing chunk sizes of this dataset.
@@ -675,22 +680,32 @@ class Dataset:
         )
       if zarr_shards is None:
         zarr_shards = self.chunks
+
+      chunks_per_shard = dict(zarr_chunks_per_shard)
+      if ... in chunks_per_shard:
+        default_cps = chunks_per_shard.pop(...)
+      else:
+        default_cps = 1
+
+      extra_keys = set(chunks_per_shard) - set(self.template.dims)
+      if extra_keys:
+        raise ValueError(
+            f'{zarr_chunks_per_shard=} includes keys that are not dimensions '
+            f' in template: {extra_keys}'
+        )
+
       zarr_chunks = {}
-      for dim, existing_chunk_size in zarr_shards.items():
-        multiple = zarr_chunks_per_shard.get(dim)
-        if multiple is None:
-          raise ValueError(
-              f'cannot write a dataset with chunks {self.chunks} to Zarr with '
-              f'{zarr_chunks_per_shard=}, which does not contain a value for '
-              f'dimension {dim!r}'
-          )
-        zarr_chunks[dim], remainder = divmod(existing_chunk_size, multiple)
+      for dim, shard_size in zarr_shards.items():
+        cps = chunks_per_shard.get(dim, default_cps)
+        chunk_size, remainder = divmod(shard_size, cps)
         if remainder != 0:
           raise ValueError(
               f'cannot write a dataset with chunks {self.chunks} to Zarr with '
               f'{zarr_chunks_per_shard=}, which do not evenly divide into '
-              'chunks'
+              f'chunks. Computed chunk size for dimension {dim!r} is '
+              f'{chunk_size}, based on {cps} chunks per shard.'
           )
+        zarr_chunks[dim] = chunk_size
     elif zarr_chunks is None:
       if zarr_shards is not None:
         raise ValueError('cannot supply zarr_shards without zarr_chunks')

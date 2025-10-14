@@ -711,6 +711,40 @@ class DatasetTest(test_util.TestCase):
       self.assertEqual(opened['foo'].encoding['chunks'], (3,))
       self.assertEqual(opened['foo'].encoding['shards'], (6,))
 
+    with self.subTest('default_one'):
+      temp_dir = self.create_tempdir().full_path
+      with beam.Pipeline() as p:
+        p |= beam_ds.to_zarr(temp_dir, zarr_chunks_per_shard={})
+      opened, chunks = xbeam.open_zarr(temp_dir)
+      xarray.testing.assert_identical(ds, opened)
+      self.assertEqual(chunks, {'x': 6})
+      self.assertEqual(opened['foo'].encoding['chunks'], (6,))
+      self.assertEqual(opened['foo'].encoding['shards'], (6,))
+
+    with self.subTest('ellipsis'):
+      temp_dir = self.create_tempdir().full_path
+      with beam.Pipeline() as p:
+        p |= beam_ds.to_zarr(temp_dir, zarr_chunks_per_shard={...: 2})
+      opened, chunks = xbeam.open_zarr(temp_dir)
+      xarray.testing.assert_identical(ds, opened)
+      self.assertEqual(chunks, {'x': 3})
+      self.assertEqual(opened['foo'].encoding['chunks'], (3,))
+      self.assertEqual(opened['foo'].encoding['shards'], (6,))
+
+    with self.subTest('ellipsis_with_dim'):
+      temp_dir = self.create_tempdir().full_path
+      ds2 = xarray.Dataset({'foo': (('x', 'y'), np.zeros((12, 10)))})
+      beam_ds2 = xbeam.Dataset.from_xarray(ds2, {'x': 6, 'y': 5})
+      with beam.Pipeline() as p:
+        p |= beam_ds2.to_zarr(
+            temp_dir, zarr_chunks_per_shard={'x': 3, ...: 1}
+        )
+      opened, chunks = xbeam.open_zarr(temp_dir)
+      xarray.testing.assert_identical(ds2, opened)
+      self.assertEqual(chunks, {'x': 2, 'y': 5})
+      self.assertEqual(opened['foo'].encoding['chunks'], (2, 5))
+      self.assertEqual(opened['foo'].encoding['shards'], (6, 5))
+
     with self.subTest('explicit_shards'):
       temp_dir = self.create_tempdir().full_path
       ds = xarray.Dataset({'foo': ('x', np.arange(24))})
@@ -738,25 +772,21 @@ class DatasetTest(test_util.TestCase):
             temp_dir, zarr_chunks_per_shard={'x': 2}, zarr_chunks={'x': 3}
         )
 
-    with self.subTest('missing_dim_error'):
+    with self.subTest('extra_key_error'):
       ds = xarray.Dataset({'foo': ('x', np.arange(12))})
       beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 6})
-      with self.assertRaisesWithLiteralMatch(
+      with self.assertRaisesRegex(
           ValueError,
-          "cannot write a dataset with chunks {'x': 6} to Zarr with "
-          "zarr_chunks_per_shard={'y': 2}, which does not contain a value for "
-          "dimension 'x'",
+          'zarr_chunks_per_shard=.* includes keys that are not dimensions',
       ):
         beam_ds.to_zarr(temp_dir, zarr_chunks_per_shard={'y': 2})
 
     with self.subTest('uneven_division_error'):
       ds = xarray.Dataset({'foo': ('x', np.arange(12))})
       beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 6})
-      with self.assertRaisesWithLiteralMatch(
+      with self.assertRaisesRegex(
           ValueError,
-          "cannot write a dataset with chunks {'x': 6} to Zarr with "
-          "zarr_chunks_per_shard={'x': 5}, which do not evenly divide into "
-          'chunks',
+          r'cannot write a dataset with chunks .*zarr_chunks_per_shard=.* which do not evenly divide',
       ):
         beam_ds.to_zarr(temp_dir, zarr_chunks_per_shard={'x': 5})
 
