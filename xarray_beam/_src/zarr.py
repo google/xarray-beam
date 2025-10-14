@@ -375,7 +375,7 @@ def _copy_zarr_store_with_fsspec(
 ) -> None:
   """Copy a Zarr store from one location to another using fsspec."""
   source_mapper = fsspec.get_mapper(source_dir)
-  dest_mapper = fsspec.get_mapper(dest_store)
+  dest_mapper = fsspec.get_mapper(os.fspath(dest_store))
 
   def copy_item(key):
     dest_mapper[key] = source_mapper[key]

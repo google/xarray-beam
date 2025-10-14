@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import pathlib
 import re
 
 from absl.testing import absltest
@@ -433,16 +434,19 @@ class DatasetToZarrTest(test_util.TestCase):
       )
 
   @parameterized.product(
+      use_pathlike=[True, False],
       stage_locally=[True, False, None],
       zarr_format=[2, 3, None],
   )
-  def test_setup_zarr(self, stage_locally, zarr_format):
+  def test_setup_zarr(self, use_pathlike, stage_locally, zarr_format):
     dataset = xarray.Dataset(
         {'foo': ('x', np.arange(0, 60, 10))},
         coords={'x': np.arange(6)},
     )
     template = xbeam.make_template(dataset)
     temp_dir = self.create_tempdir().full_path
+    if use_pathlike:
+      temp_dir = pathlib.Path(temp_dir)
     xbeam.setup_zarr(
         template,
         temp_dir,
