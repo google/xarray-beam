@@ -29,20 +29,15 @@ _DEFAULT = object()
 
 
 class Key:
-  """Key for keeping track of chunks of a distributed Dataset or DataTree.
+  """Key for keeping track of chunks of a distributed Dataset.
 
-  Key object in Xarray-Beam include three components:
+  Key object in Xarray-Beam include two components:
 
   - "offsets": an immutable dict indicating integer offsets (total number of
-    array elements) from the origin along each dimension for this chunk. For
-    DataTree chunks, offsets also apply to all child nodes, similar to how
-    DataTree dimensions are shared with child nodes.
+    array elements) from the origin along each dimension for this chunk.
   - "vars": either an frozenset or None, indicating the subset of Dataset
     variables included in this chunk. The default value of None means that all
     variables are included.
-  - "children": either an immutabledict of Key objects or None, indicating
-    subset of DataTree node descendents included in this chunk. The default
-    value of None means that all child nodes are included.
 
   Key objects are "deterministically encoded" by Beam, which makes them suitable
   for use as keys in Beam pipelines, i.e., with beam.GroupByKey. They are also
@@ -81,11 +76,6 @@ class Key:
     >>> key.replace(vars=None)
     Key(offsets={'x': 10})
 
-  Children are defined using nested `Key` objects::
-
-    >>> xarray_beam.Key(children={'first_child': xarray_beam.Key({'x': 10})})
-    Key(children={'first_child': Key(offsets={'x': 10})})
-
   """
 
   # pylint: disable=redefined-builtin
@@ -94,7 +84,6 @@ class Key:
       self,
       offsets: Mapping[str, int] | None = None,
       vars: Set[str] | None = None,
-      children: Mapping[str, Key] | None = None,
   ):
     if offsets is None:
       offsets = {}
@@ -102,24 +91,18 @@ class Key:
       raise TypeError(f"vars must be a set or None, but is {vars!r}")
     self.offsets = immutabledict.immutabledict(offsets)
     self.vars = None if vars is None else frozenset(vars)
-    self.children = (
-        None if children is None else immutabledict.immutabledict(children)
-    )
 
   def replace(
       self,
       offsets: Mapping[str, int] | object = _DEFAULT,
       vars: Set[str] | None | object = _DEFAULT,
-      children: Mapping[str, Key] | None | object = _DEFAULT,
   ) -> Key:
     """Replace one or more components of this Key with new values."""
     if offsets is _DEFAULT:
       offsets = self.offsets
     if vars is _DEFAULT:
       vars = self.vars
-    if children is _DEFAULT:
-      children = self.children
-    return type(self)(offsets, vars, children)
+    return type(self)(offsets, vars)
 
   def with_offsets(self, **offsets: int | None) -> Key:
     """Replace some offsets with new values.
@@ -145,12 +128,10 @@ class Key:
       components.append(f"offsets={dict(self.offsets)}")
     if self.vars is not None:
       components.append(f"vars={set(self.vars)}")
-    if self.children is not None:
-      components.append(f"children={dict(self.children)}")
     return f"{type(self).__name__}({', '.join(components)})"
 
   def __hash__(self) -> int:
-    return hash((self.offsets, self.vars, self.children))
+    return hash((self.offsets, self.vars))
 
   def __eq__(self, other) -> bool:
     if not isinstance(other, Key):
@@ -158,7 +139,6 @@ class Key:
     return (
         self.offsets == other.offsets
         and self.vars == other.vars
-        and self.children == other.children
     )
 
   def __ne__(self, other) -> bool:
@@ -169,10 +149,7 @@ class Key:
   def __getstate__(self):
     offsets_state = sorted(self.offsets.items())
     vars_state = None if self.vars is None else sorted(self.vars)
-    children_state = (
-        None if self.children is None else sorted(self.children.items())
-    )
-    return offsets_state, vars_state, children_state
+    return offsets_state, vars_state
 
   def __setstate__(self, state):
     self.__init__(*state)

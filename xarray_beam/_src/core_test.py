@@ -37,20 +37,11 @@ class KeyTest(test_util.TestCase):
     self.assertIsInstance(key.offsets, immutabledict.immutabledict)
     self.assertEqual(dict(key.offsets), {'x': 0, 'y': 10})
     self.assertIsNone(key.vars)
-    self.assertIsNone(key.children)
 
     key = xbeam.Key(vars={'foo'})
     self.assertEqual(dict(key.offsets), {})
     self.assertIsInstance(key.vars, frozenset)
     self.assertEqual(set(key.vars), {'foo'})
-    self.assertIsNone(key.children)
-
-    child_key = xbeam.Key({'x': 0})
-    key = xbeam.Key(children={'sub': child_key})
-    self.assertEqual(dict(key.offsets), {})
-    self.assertIsNone(key.vars)
-    self.assertIsInstance(key.children, immutabledict.immutabledict)
-    self.assertEqual(dict(key.children), {'sub': child_key})
 
     with self.assertRaisesRegex(TypeError, 'vars must be a set or None'):
       xbeam.Key(vars='foo')
@@ -80,16 +71,6 @@ class KeyTest(test_util.TestCase):
 
     expected = xbeam.Key({'y': 1}, {'bar'})
     actual = key.replace({'y': 1}, {'bar'})
-    self.assertEqual(expected, actual)
-
-    child = xbeam.Key()
-    expected = xbeam.Key({'x': 0}, {'foo'}, children={'sub': child})
-    actual = key.replace(children={'sub': child})
-    self.assertEqual(expected, actual)
-
-    key2 = xbeam.Key(children={'sub': child})
-    expected = xbeam.Key()
-    actual = key2.replace(children=None)
     self.assertEqual(expected, actual)
 
   def test_with_offsets(self):
@@ -125,10 +106,6 @@ class KeyTest(test_util.TestCase):
     expected = "Key(vars={'foo'})"
     self.assertEqual(repr(key), expected)
 
-    key = xbeam.Key(children={'sub': xbeam.Key()})
-    expected = "Key(children={'sub': Key()})"
-    self.assertEqual(repr(key), expected)
-
   def test_dict_key(self):
     first = {xbeam.Key({'x': 0, 'y': 10}): 1}
     second = {xbeam.Key({'x': 0, 'y': 10}): 1}
@@ -143,11 +120,6 @@ class KeyTest(test_util.TestCase):
     self.assertEqual(key2, key2)
     self.assertNotEqual(key, key2)
     self.assertNotEqual(key2, key)
-
-    key3 = xbeam.Key({'x': 0, 'y': 10}, children={'sub': xbeam.Key()})
-    self.assertEqual(key3, key3)
-    self.assertNotEqual(key, key3)
-    self.assertNotEqual(key3, key)
 
   def test_offsets_as_beam_key(self):
     inputs = [
@@ -175,22 +147,9 @@ class KeyTest(test_util.TestCase):
     actual = inputs | beam.GroupByKey()
     self.assertEqual(actual, expected)
 
-  def test_children_as_beam_key(self):
-    inputs = [
-        (xbeam.Key(children={'sub': xbeam.Key()}), 1),
-        (xbeam.Key(children={}), 2),
-        (xbeam.Key(children={'sub': xbeam.Key()}), 3),
-    ]
-    expected = [
-        (xbeam.Key(children={'sub': xbeam.Key()}), [1, 3]),
-        (xbeam.Key(children={}), [2]),
-    ]
-    actual = inputs | beam.GroupByKey()
-    self.assertEqual(actual, expected)
-
   def test_pickle(self):
     key = xbeam.Key(
-        {'x': 0, 'y': 10}, vars={'foo'}, children={'sub': xbeam.Key({'z': 0})}
+        {'x': 0, 'y': 10}, vars={'foo'}
     )
     unpickled = pickle.loads(pickle.dumps(key))
     self.assertEqual(key, unpickled)
