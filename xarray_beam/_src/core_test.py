@@ -17,6 +17,7 @@ import re
 from absl.testing import absltest
 from absl.testing import parameterized
 import apache_beam as beam
+import dask.array as da
 import immutabledict
 import pickle
 import numpy as np
@@ -449,7 +450,25 @@ class DatasetToChunksTest(test_util.TestCase):
     with self.assertRaisesWithLiteralMatch(
         ValueError, 'dataset must be chunked or chunks must be provided'
     ):
-      test_util.EagerPipeline() | xbeam.DatasetToChunks(dataset, chunks=None)
+      xbeam.DatasetToChunks(dataset, chunks=None)
+
+    dataset_bad_chunks1 = xarray.Dataset(
+        {'foo': ('x', da.from_array(np.arange(25), chunks=(10, 5, 10)))}
+    )
+    with self.assertRaisesRegex(
+        ValueError,
+        "dimension 'x' has inconsistent dask chunks",
+    ):
+      xbeam.DatasetToChunks(dataset_bad_chunks1, chunks=None)
+
+    dataset_bad_chunks2 = xarray.Dataset(
+        {'foo': ('x', da.from_array(np.arange(8), chunks=(3, 5)))}
+    )
+    with self.assertRaisesRegex(
+        ValueError,
+        "dimension 'x' has dask chunks where the last chunk 5 is larger",
+    ):
+      xbeam.DatasetToChunks(dataset_bad_chunks2, chunks=None)
 
     with self.assertRaisesWithLiteralMatch(
         ValueError,

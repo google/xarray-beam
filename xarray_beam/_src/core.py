@@ -14,7 +14,8 @@
 """Core data model for xarray-beam."""
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence, Set
+from collections.abc import Hashable, Iterator, Mapping, Sequence, Set
+from functools import cached_property
 import itertools
 import math
 from typing import Generic, TypeVar
@@ -234,6 +235,26 @@ def compute_offset_index(
   return index
 
 
+def dask_to_xbeam_chunks(
+    dask_chunks: Mapping[Hashable, tuple[int, ...]]
+) -> dict[Hashable, int]:
+  """Convert dask chunks to xarray-beam chunks."""
+  for dim, dim_chunks in dask_chunks.items():
+    if len(dim_chunks) > 1:
+      if len(set(dim_chunks[:-1])) > 1:
+        raise ValueError(
+            f"dimension {dim!r} has inconsistent dask chunks: "
+            f"{dim_chunks}. All chunks except for the last must be equal."
+        )
+      if dim_chunks[-1] > dim_chunks[0]:
+        raise ValueError(
+            f"dimension {dim!r} has dask chunks where the last chunk "
+            f"{dim_chunks[-1]} is larger than preceding chunks "
+            f"{dim_chunks[0]}: {dim_chunks}."
+        )
+  return {k: v[0] for k, v in dask_chunks.items()}
+
+
 def normalize_expanded_chunks(
     chunks: Mapping[str, int | tuple[int, ...]],
     dim_sizes: Mapping[str, int],
@@ -282,6 +303,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
       split_vars: bool = False,
       num_threads: int | None = None,
       shard_keys_threshold: int = 200_000,
+      tasks_per_shard: int = 10_000,
   ):
     """Initialize DatasetToChunks.
 
@@ -304,32 +326,29 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
       shard_keys_threshold: threshold at which to compute keys on Beam workers,
         rather than only on the host process. This is important for scaling
         pipelines to millions of tasks.
+      tasks_per_shard: number of tasks to emit per shard. Only used if the
+        number of tasks exceeds shard_keys_threshold.
     """
     self.dataset = dataset
     self._validate(dataset, split_vars)
-    if chunks is None:
-      chunks = self._first.chunks
-      if not chunks:
-        raise ValueError("dataset must be chunked or chunks must be provided")
-    for dim in chunks:
-      if not any(dim in ds.dims for ds in self._datasets):
-        raise ValueError(
-            f"chunks key {dim!r} is not a dimension on the provided dataset(s)"
-        )
-    expanded_chunks = normalize_expanded_chunks(chunks, self._first.sizes)  # pytype: disable=wrong-arg-types  # always-use-property-annotation
-    self.expanded_chunks = expanded_chunks
     self.split_vars = split_vars
     self.num_threads = num_threads
     self.shard_keys_threshold = shard_keys_threshold
-    # TODO(shoyer): consider recalculating these potentially large properties on
-    # each worker, rather than only once on the host.
-    self.offsets = _chunks_to_offsets(expanded_chunks)
-    self.offset_index = compute_offset_index(self.offsets)
-    # We use the simple heuristic of only sharding inputs along the dimension
-    # with the most chunks.
-    lengths = {k: len(v) for k, v in self.offsets.items()}
-    self.sharded_dim = max(lengths, key=lengths.get) if lengths else None
-    self.shard_count = self._shard_count()
+    self.tasks_per_shard = tasks_per_shard
+
+    if chunks is None:
+      dask_chunks = self._first.chunks
+      if not dask_chunks:
+        raise ValueError("dataset must be chunked or chunks must be provided")
+      chunks = dask_to_xbeam_chunks(dask_chunks)
+
+    for k in chunks:
+      if k not in self._first.dims:
+        raise ValueError(
+            f"chunks key {k!r} is not a dimension on the provided dataset(s)"
+        )
+
+    self.chunks = chunks
 
   @property
   def _first(self) -> xarray.Dataset:
@@ -340,6 +359,18 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     if isinstance(self.dataset, xarray.Dataset):
       return [self.dataset]
     return list(self.dataset)  # pytype: disable=bad-return-type
+
+  @cached_property
+  def expanded_chunks(self) -> dict[str, tuple[int, ...]]:
+    return normalize_expanded_chunks(self.chunks, self._first.sizes)  # pytype: disable=wrong-arg-types  # always-use-property-annotation
+
+  @cached_property
+  def offsets(self) -> dict[str, list[int]]:
+    return _chunks_to_offsets(self.expanded_chunks)
+
+  @cached_property
+  def offset_index(self) -> dict[str, dict[int, int]]:
+    return compute_offset_index(self.offsets)
 
   def _validate(self, dataset, split_vars):
     """Raise errors if input parameters are invalid."""
@@ -382,19 +413,28 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
       total += int(np.prod(count_list))
     return total
 
-  def _shard_count(self) -> int | None:
+  @cached_property
+  def sharded_dim(self) -> str | None:
+    # We use the simple heuristic of only sharding inputs along the dimension
+    # with the most chunks.
+    lengths = {
+        k: math.ceil(size / self.chunks.get(k, size))
+        for k, size in self._first.sizes.items()
+    }
+    return max(lengths, key=lengths.get) if lengths else None  # pytype: disable=bad-return-type
+
+  @cached_property
+  def shard_count(self) -> int | None:
     """Determine the number of times to shard input keys."""
     task_count = self._task_count()
     if task_count <= self.shard_keys_threshold:
       return None  # no sharding
-
     if not self.split_vars:
-      return math.ceil(task_count / self.shard_keys_threshold)
-
+      return math.ceil(task_count / self.tasks_per_shard)
     var_count = sum(
         self.sharded_dim in var.dims for var in self._first.values()
     )
-    return math.ceil(task_count / (var_count * self.shard_keys_threshold))
+    return math.ceil(task_count / (var_count * self.tasks_per_shard))
 
   def _iter_all_keys(self) -> Iterator[Key]:
     """Iterate over all Key objects."""
