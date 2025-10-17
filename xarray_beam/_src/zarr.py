@@ -770,7 +770,11 @@ class ChunksToZarr(beam.PTransform):
 
   def _write_chunk_to_zarr(self, key, chunk, template=None):
     assert template is not None
-    return write_chunk_to_zarr(key, chunk, self.store, template)
+    namespace = 'xarray_beam.ChunksToZarr'
+    with core.inc_timer_msec(namespace, "write-msec"):
+      write_chunk_to_zarr(key, chunk, self.store, template)
+    core.inc_counter(namespace, 'write-chunks')
+    core.inc_counter(namespace, 'write-bytes', chunk.nbytes)
 
   def expand(self, pcoll):
     if isinstance(self.template, xarray.Dataset):

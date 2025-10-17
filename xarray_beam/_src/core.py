@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterator, Mapping, Sequence, Set
+import contextlib
 from functools import cached_property
 import itertools
 import math
+import time
 from typing import Generic, TypeVar
 
 import apache_beam as beam
@@ -25,6 +27,21 @@ import immutabledict
 import numpy as np
 import xarray
 from xarray_beam._src import threadmap
+
+
+def inc_counter(namespace: str | type, name: str, value: int = 1):
+  """Increments a Beam counter."""
+  return beam.metrics.Metrics.counter(namespace, name).inc(value)
+
+
+@contextlib.contextmanager
+def inc_timer_msec(namespace: str | type, name: str) -> Iterator[None]:
+  """Records elapsed time in milliseconds in a Beam counter."""
+  start = time.perf_counter()
+  yield
+  elapsed = time.perf_counter() - start
+  inc_counter(namespace, name, round(elapsed * 1000))
+
 
 _DEFAULT = object()
 
@@ -76,7 +93,6 @@ class Key:
 
     >>> key.replace(vars=None)
     Key(offsets={'x': 10})
-
   """
 
   # pylint: disable=redefined-builtin
@@ -109,8 +125,8 @@ class Key:
     """Replace some offsets with new values.
 
     Args:
-      **offsets: offsets to override (for integer values) or remove, with
-        values of ``None``.
+      **offsets: offsets to override (for integer values) or remove, with values
+        of ``None``.
 
     Returns:
       New Key with the specified offsets.
@@ -137,10 +153,7 @@ class Key:
   def __eq__(self, other) -> bool:
     if not isinstance(other, Key):
       return NotImplemented
-    return (
-        self.offsets == other.offsets
-        and self.vars == other.vars
-    )
+    return self.offsets == other.offsets and self.vars == other.vars
 
   def __ne__(self, other) -> bool:
     return not self == other
@@ -236,7 +249,7 @@ def compute_offset_index(
 
 
 def dask_to_xbeam_chunks(
-    dask_chunks: Mapping[Hashable, tuple[int, ...]]
+    dask_chunks: Mapping[Hashable, tuple[int, ...]],
 ) -> dict[Hashable, int]:
   """Convert dask chunks to xarray-beam chunks."""
   for dim, dim_chunks in dask_chunks.items():
@@ -483,25 +496,32 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
 
   def _key_to_chunks(self, key: Key) -> Iterator[tuple[Key, DatasetOrDatasets]]:
     """Convert a Key into an in-memory (Key, xarray.Dataset) pair."""
-    sizes = {
-        dim: self.expanded_chunks[dim][self.offset_index[dim][offset]]
-        for dim, offset in key.offsets.items()
-    }
-    slices = offsets_to_slices(key.offsets, sizes)
-    results = []
-    for ds in self._datasets:
-      dataset = ds if key.vars is None else ds[list(key.vars)]
-      valid_slices = {k: v for k, v in slices.items() if k in dataset.dims}
-      chunk = dataset.isel(valid_slices)
-      # Load the data, using a separate thread for each variable
-      num_threads = len(dataset)
-      result = chunk.chunk().compute(num_workers=num_threads)
-      results.append(result)
+    namespace = "xarray_beam.DatasetToChunks"
+    with inc_timer_msec(namespace, "read-msec"):
+      sizes = {
+          dim: self.expanded_chunks[dim][self.offset_index[dim][offset]]
+          for dim, offset in key.offsets.items()
+      }
+      slices = offsets_to_slices(key.offsets, sizes)
+      results = []
+      for ds in self._datasets:
+        dataset = ds if key.vars is None else ds[list(key.vars)]
+        valid_slices = {k: v for k, v in slices.items() if k in dataset.dims}
+        chunk = dataset.isel(valid_slices)
+        # Load the data, using a separate thread for each variable
+        num_threads = len(dataset)
+        result = chunk.chunk().compute(num_workers=num_threads)
+        results.append(result)
+
+    inc_counter(namespace, "read-chunks")
+    inc_counter(
+        namespace, "read-bytes", sum(result.nbytes for result in results)
+    )
 
     if isinstance(self.dataset, xarray.Dataset):
       yield key, results[0]
     else:
-      yield key, list(results)
+      yield key, results
 
   def expand(self, pcoll):
     if self.shard_count is None:
@@ -522,7 +542,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
     )
 
 
-def _ensure_chunk_is_computed(key: Key,dataset: xarray.Dataset) -> None:
+def _ensure_chunk_is_computed(key: Key, dataset: xarray.Dataset) -> None:
   """Ensure that a dataset contains no chunked variables."""
   for var_name, variable in dataset.variables.items():
     if variable.chunks is not None:
