@@ -20,7 +20,7 @@ from functools import cached_property
 import itertools
 import math
 import time
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 import apache_beam as beam
 import immutabledict
@@ -29,13 +29,21 @@ import xarray
 from xarray_beam._src import threadmap
 
 
-def inc_counter(namespace: str | type, name: str, value: int = 1):
+T = TypeVar('T')
+
+
+def export(obj: T) -> T:
+  obj.__module__ = 'xarray_beam'
+  return obj
+
+
+def inc_counter(namespace: str | type[Any], name: str, value: int = 1):
   """Increments a Beam counter."""
   return beam.metrics.Metrics.counter(namespace, name).inc(value)
 
 
 @contextlib.contextmanager
-def inc_timer_msec(namespace: str | type, name: str) -> Iterator[None]:
+def inc_timer_msec(namespace: str | type[Any], name: str) -> Iterator[None]:
   """Records elapsed time in milliseconds in a Beam counter."""
   start = time.perf_counter()
   yield
@@ -46,6 +54,7 @@ def inc_timer_msec(namespace: str | type, name: str) -> Iterator[None]:
 _DEFAULT = object()
 
 
+@export
 class Key:
   """Key for keeping track of chunks of a distributed Dataset.
 
@@ -172,6 +181,7 @@ class Key:
 K = TypeVar("K")
 
 
+@export
 def offsets_to_slices(
     offsets: Mapping[K, int],
     sizes: Mapping[K, int],
@@ -306,6 +316,7 @@ DatasetOrDatasets = TypeVar(
 )
 
 
+@export
 class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
   """Split one or more xarray.Datasets into keyed chunks."""
 
@@ -557,6 +568,7 @@ def _ensure_chunk_is_computed(key: Key, dataset: xarray.Dataset) -> None:
       )
 
 
+@export
 def validate_chunk(key: Key, datasets: DatasetOrDatasets) -> None:
   """Verify that a key and dataset(s) are valid for xarray-beam transforms."""
   if isinstance(datasets, xarray.Dataset):
@@ -586,6 +598,7 @@ def validate_chunk(key: Key, datasets: DatasetOrDatasets) -> None:
         )
 
 
+@export
 class ValidateEachChunk(beam.PTransform):
   """Check that keys and dataset(s) are valid for xarray-beam transforms."""
 

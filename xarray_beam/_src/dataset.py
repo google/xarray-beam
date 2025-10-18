@@ -80,6 +80,7 @@ def _to_human_size(nbytes: int) -> str:
 UnnormalizedChunks = Mapping[str | types.EllipsisType, int | str] | int | str
 
 
+@core.export
 def normalize_chunks(
     chunks: UnnormalizedChunks,
     template: xarray.Dataset,
@@ -404,6 +405,7 @@ class _CountNamer:
 _get_label = _CountNamer().apply
 
 
+@core.export
 @dataclasses.dataclass
 class Dataset:
   """Experimental high-level representation of an Xarray-Beam dataset."""

@@ -163,6 +163,7 @@ def _consolidate_chunks_in_var_group(
     ) from original_error
 
 
+@core.export
 def consolidate_chunks(
     inputs: Iterable[tuple[core.Key, xarray.Dataset]],
     combine_kwargs: Mapping[str, Any] | None = None,
@@ -196,6 +197,7 @@ def consolidate_chunks(
     yield combined_key, combined_dataset
 
 
+@core.export
 def consolidate_variables(
     inputs: Iterable[tuple[core.Key, xarray.Dataset]],
     merge_kwargs: Mapping[str, Any] | None = None,
@@ -236,6 +238,7 @@ def consolidate_variables(
     yield key, dataset
 
 
+@core.export
 def consolidate_fully(
     inputs: Iterable[tuple[core.Key, xarray.Dataset]],
     *,
@@ -286,17 +289,6 @@ def consolidate_fully(
   return core.Key(combined_offsets, combined_vars), dataset  # pytype: disable=wrong-arg-types
 
 
-class _ConsolidateBase(beam.PTransform):
-
-  def expand(self, pcoll):
-    return (
-        pcoll
-        | 'PrependTempKey' >> beam.MapTuple(self._prepend_chunk_key)
-        | 'GroupByTempKeys' >> beam.GroupByKey()
-        | 'Consolidate' >> beam.MapTuple(self._consolidate_chunks)
-    )
-
-
 def _round_chunk_key(
     key: core.Key,
     target_chunks: Mapping[str, int],
@@ -314,6 +306,7 @@ def _round_chunk_key(
   return key.replace(new_offsets)
 
 
+@core.export
 @dataclasses.dataclass
 class ConsolidateChunks(beam.PTransform):
   """Consolidate existing chunks across offsets into bigger chunks."""
@@ -338,6 +331,7 @@ class ConsolidateChunks(beam.PTransform):
     )
 
 
+@core.export
 class ConsolidateVariables(beam.PTransform):
   """Consolidate existing chunks across variables into bigger chunks."""
 
@@ -393,6 +387,7 @@ def _split_chunk_bounds(
   return list(zip([start] + breaks, breaks + [stop]))
 
 
+@core.export
 def split_chunks(
     key: core.Key,
     dataset: xarray.Dataset,
@@ -424,13 +419,16 @@ def split_chunks(
     yield new_key, new_chunk
 
 
+@core.export
 @dataclasses.dataclass
 class SplitChunks(beam.PTransform):
   """Split existing chunks into smaller chunks."""
 
   target_chunks: Mapping[str, int]
 
-  def _split_chunks(self, key, dataset):
+  def _split_chunks(
+      self, key: core.Key, dataset: xarray.Dataset
+  ) -> Iterator[tuple[core.Key, xarray.Dataset]]:
     target_chunks = {
         k: v for k, v in self.target_chunks.items() if k in dataset.dims
     }
@@ -440,6 +438,7 @@ class SplitChunks(beam.PTransform):
     return pcoll | beam.FlatMapTuple(self._split_chunks)
 
 
+@core.export
 def split_variables(
     key: core.Key,
     dataset: xarray.Dataset,
@@ -454,6 +453,7 @@ def split_variables(
     yield new_key, new_dataset
 
 
+@core.export
 @dataclasses.dataclass
 class SplitVariables(beam.PTransform):
   """Split existing chunks into a separate chunk per data variable."""
@@ -462,6 +462,7 @@ class SplitVariables(beam.PTransform):
     return pcoll | beam.FlatMapTuple(split_variables)
 
 
+@core.export
 def in_memory_rechunk(
     inputs: list[tuple[core.Key, xarray.Dataset]],
     target_chunks: Mapping[str, int],
@@ -489,6 +490,7 @@ class RechunkStage(beam.PTransform):
     return pcoll
 
 
+@core.export
 class Rechunk(beam.PTransform):
   """Rechunk to an arbitrary new chunking scheme with bounded memory usage.
 

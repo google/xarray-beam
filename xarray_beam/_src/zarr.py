@@ -68,6 +68,7 @@ def _infer_chunks(dataset: xarray.Dataset) -> dict[str, int]:
   return chunks
 
 
+@core.export
 def open_zarr(
     store: ReadableStore, **kwargs: Any
 ) -> tuple[xarray.Dataset, dict[str, int]]:
@@ -102,6 +103,7 @@ def _raise_template_error():
   )
 
 
+@core.export
 def make_template(
     dataset: xarray.Dataset,
     lazy_vars: Set[str] | None = None,
@@ -144,6 +146,7 @@ def make_template(
   return result
 
 
+@core.export
 def replace_template_dims(
     template: xarray.Dataset,
     **dim_replacements: int | np.ndarray | pd.Index | xarray.DataArray,
@@ -458,6 +461,7 @@ def _setup_zarr(
   logging.info('finished setting up Zarr')
 
 
+@core.export
 def setup_zarr(
     template: xarray.Dataset,
     store: WritableStore,
@@ -511,6 +515,7 @@ def setup_zarr(
   )
 
 
+@core.export
 def validate_zarr_chunk(
     key: core.Key,
     chunk: xarray.Dataset,
@@ -584,6 +589,7 @@ def validate_zarr_chunk(
   # Note that variable names, shapes & dtypes are verified in xarray's to_zarr()
 
 
+@core.export
 def write_chunk_to_zarr(
     key: core.Key,
     chunk: xarray.Dataset,
@@ -629,6 +635,7 @@ def write_chunk_to_zarr(
     ) from e
 
 
+@core.export
 class ChunksToZarr(beam.PTransform):
   """Write keyed chunks to a Zarr store in parallel."""
 
@@ -817,6 +824,7 @@ class ChunksToZarr(beam.PTransform):
     )
 
 
+@core.export
 @dataclasses.dataclass
 class DatasetToZarr(beam.PTransform):
   """Write an entire xarray.Dataset to a Zarr store."""

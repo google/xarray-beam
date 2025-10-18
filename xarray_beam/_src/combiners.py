@@ -64,6 +64,7 @@ class _SumAndCount:
     return sum_increment, count_increment
 
 
+@core.export
 @dataclasses.dataclass
 class MeanCombineFn(beam.transforms.CombineFn):
   """CombineFn for computing an arithmetic mean of xarray.Dataset objects."""
@@ -96,6 +97,7 @@ class MeanCombineFn(beam.transforms.CombineFn):
       return sum_count
 
 
+@core.export
 @dataclasses.dataclass
 class Mean(beam.PTransform):
   """Calculate the mean over one or more distributed dataset dimensions.
