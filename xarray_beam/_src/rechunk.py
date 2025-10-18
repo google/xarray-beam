@@ -314,12 +314,17 @@ class ConsolidateChunks(beam.PTransform):
   target_chunks: Mapping[str, int]
 
   def _prepend_chunk_key(self, key, chunk):
+    core.inc_counter(self.__class__, 'in-chunks')
+    core.inc_counter(self.__class__, 'in-bytes', chunk.nbytes)
     rounded_key = _round_chunk_key(key, self.target_chunks)
     return rounded_key, (key, chunk)
 
   def _consolidate(self, key, inputs):
-    ((consolidated_key, dataset),) = consolidate_chunks(inputs)
+    with core.inc_timer_msec(self.__class__, 'consolidate-msec'):
+      ((consolidated_key, dataset),) = consolidate_chunks(inputs)
     assert key == consolidated_key, (key, consolidated_key)
+    core.inc_counter(self.__class__, 'out-chunks')
+    core.inc_counter(self.__class__, 'out-bytes', dataset.nbytes)
     return consolidated_key, dataset
 
   def expand(self, pcoll):
@@ -339,10 +344,13 @@ class ConsolidateVariables(beam.PTransform):
   # of variables.
 
   def _prepend_chunk_key(self, key, chunk):
+    core.inc_counter(self.__class__, 'in-chunks')
+    core.inc_counter(self.__class__, 'in-bytes', chunk.nbytes)
     return key.replace(vars=None), (key, chunk)
 
   def _consolidate(self, key, inputs):
-    ((consolidated_key, dataset),) = consolidate_variables(inputs)
+    with core.inc_timer_msec(self.__class__, 'consolidate-msec'):
+      ((consolidated_key, dataset),) = consolidate_variables(inputs)
     assert key.offsets == consolidated_key.offsets, (key, consolidated_key)
     assert key.vars is None
     # TODO(shoyer): consider carefully whether it is better to return key or
@@ -350,6 +358,8 @@ class ConsolidateVariables(beam.PTransform):
     # difference is whether vars=None or is an explicit set of variables.
     # For now, conservatively return the version of key with vars=None so
     # users don't rely on it.
+    core.inc_counter(self.__class__, 'out-chunks')
+    core.inc_counter(self.__class__, 'out-bytes', dataset.nbytes)
     return key, dataset
 
   def expand(self, pcoll):
@@ -432,7 +442,13 @@ class SplitChunks(beam.PTransform):
     target_chunks = {
         k: v for k, v in self.target_chunks.items() if k in dataset.dims
     }
-    yield from split_chunks(key, dataset, target_chunks)
+    core.inc_counter(self.__class__, 'in-chunks')
+    core.inc_counter(self.__class__, 'in-bytes', dataset.nbytes)
+    with core.inc_timer_msec(self.__class__, 'split-msec'):
+      for new_key, new_dataset in split_chunks(key, dataset, target_chunks):
+        yield new_key, new_dataset
+        core.inc_counter(self.__class__, 'out-chunks')
+        core.inc_counter(self.__class__, 'out-bytes', new_dataset.nbytes)
 
   def expand(self, pcoll):
     return pcoll | beam.FlatMapTuple(self._split_chunks)
@@ -458,8 +474,19 @@ def split_variables(
 class SplitVariables(beam.PTransform):
   """Split existing chunks into a separate chunk per data variable."""
 
+  def _split_variables(
+      self, key: core.Key, dataset: xarray.Dataset
+  ) -> Iterator[tuple[core.Key, xarray.Dataset]]:
+    core.inc_counter(self.__class__, 'in-chunks')
+    core.inc_counter(self.__class__, 'in-bytes', dataset.nbytes)
+    with core.inc_timer_msec(self.__class__, 'split-msec'):
+      for new_key, new_dataset in split_variables(key, dataset):
+        yield new_key, new_dataset
+        core.inc_counter(self.__class__, 'out-chunks')
+        core.inc_counter(self.__class__, 'out-bytes', new_dataset.nbytes)
+
   def expand(self, pcoll):
-    return pcoll | beam.FlatMapTuple(split_variables)
+    return pcoll | beam.FlatMapTuple(self._split_variables)
 
 
 @core.export

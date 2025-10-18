@@ -507,8 +507,7 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
 
   def _key_to_chunks(self, key: Key) -> Iterator[tuple[Key, DatasetOrDatasets]]:
     """Convert a Key into an in-memory (Key, xarray.Dataset) pair."""
-    namespace = "xarray_beam.DatasetToChunks"
-    with inc_timer_msec(namespace, "read-msec"):
+    with inc_timer_msec(self.__class__, "read-msec"):
       sizes = {
           dim: self.expanded_chunks[dim][self.offset_index[dim][offset]]
           for dim, offset in key.offsets.items()
@@ -524,9 +523,9 @@ class DatasetToChunks(beam.PTransform, Generic[DatasetOrDatasets]):
         result = chunk.chunk().compute(num_workers=num_threads)
         results.append(result)
 
-    inc_counter(namespace, "read-chunks")
+    inc_counter(self.__class__, "read-chunks")
     inc_counter(
-        namespace, "read-bytes", sum(result.nbytes for result in results)
+        self.__class__, "read-bytes", sum(result.nbytes for result in results)
     )
 
     if isinstance(self.dataset, xarray.Dataset):

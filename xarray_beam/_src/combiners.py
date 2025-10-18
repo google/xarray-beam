@@ -76,20 +76,28 @@ class MeanCombineFn(beam.transforms.CombineFn):
     return (0, 0)
 
   def add_input(self, sum_count, element):
+    core.inc_counter(self.__class__, 'add-input-calls')
     (sum_, count) = sum_count
     if self.sum_and_count is not None:
+      core.inc_counter(self.__class__, 'add-input-in-bytes', element.nbytes)
       sum_increment, count_increment = self.sum_and_count(element)
     else:
       sum_increment, count_increment = element
+      nbytes = sum_increment.nbytes + count_increment.nbytes
+      core.inc_counter(self.__class__, 'add-input-bytes', nbytes)
     new_sum = sum_ + sum_increment
     new_count = count + count_increment
+    nbytes = new_sum.nbytes + new_count.nbytes
+    core.inc_counter(self.__class__, 'add-input-out-bytes', nbytes)
     return new_sum, new_count
 
   def merge_accumulators(self, accumulators):
+    core.inc_counter(self.__class__, 'merge-accumulators')
     sums, counts = zip(*accumulators)
     return sum(sums), sum(counts)
 
   def extract_output(self, sum_count):
+    core.inc_counter(self.__class__, 'extract-outputs')
     if self.finalize:
       (sum_, count) = sum_count
       return sum_ / count
@@ -317,12 +325,29 @@ class MultiStageMean(beam.PTransform):
         f' pre_aggregate={self.pre_aggregate}'
     )
 
+  @property
+  def _sum_and_count(self):
+    return _SumAndCount(self.dims, self.skipna, self.dtype)
+
+  def _pre_aggregate(
+      self, key: core.Key, chunk: xarray.Dataset
+  ) -> tuple[core.Key, tuple[xarray.Dataset, xarray.Dataset]]:
+    core.inc_counter(self.__class__, 'preaggregate-calls')
+    core.inc_counter(self.__class__, 'preaggregate-in-bytes', chunk.nbytes)
+    sum_increment, count_increment = self._sum_and_count(chunk)
+    out_bytes = sum_increment.nbytes + count_increment.nbytes
+    core.inc_counter(self.__class__, 'preaggregate-out-bytes', out_bytes)
+    return key, (sum_increment, count_increment)
+
   def _finalize_no_combiner(
       self, key: core.Key, sum_count: tuple[xarray.Dataset, xarray.Dataset]
   ) -> tuple[core.Key, xarray.Dataset]:
     key = key.with_offsets(**{d: None for d in self.dims if d in key.offsets})
     sum_, count = sum_count
-    return key, sum_ / count
+    chunk = sum_ / count
+    core.inc_counter(self.__class__, 'finalize-calls')
+    core.inc_counter(self.__class__, 'finalize-bytes', chunk.nbytes)
+    return key, chunk
 
   def _prepare_key(
       self, key: core.Key, chunk: xarray.Dataset
@@ -348,24 +373,20 @@ class MultiStageMean(beam.PTransform):
     return key, value
 
   def expand(self, pcoll):
-    sum_and_count = _SumAndCount(self.dims, self.skipna, self.dtype)
-
     if not self.bins_per_stage:  # no combiner needed
-      pcoll |= 'Aggregate' >> beam.MapTuple(lambda k, v: (k, sum_and_count(v)))
+      pcoll |= 'Aggregate' >> beam.MapTuple(self._pre_aggregate)
       pcoll |= 'Finalize' >> beam.MapTuple(self._finalize_no_combiner)
       return pcoll
 
     if self.pre_aggregate:
-      pcoll |= 'PreAggregate' >> beam.MapTuple(
-          lambda k, v: (k, sum_and_count(v))
-      )
+      pcoll |= 'PreAggregate' >> beam.MapTuple(self._pre_aggregate)
     pcoll |= 'PrepareKey' >> beam.MapTuple(self._prepare_key)
     for i in range(len(self.bins_per_stage)):
       final_stage = i + 1 >= len(self.bins_per_stage)
       if self.pre_aggregate or i > 0:
         combine_fn = MeanCombineFn(None, finalize=final_stage)
       else:
-        combine_fn = MeanCombineFn(sum_and_count, finalize=final_stage)
+        combine_fn = MeanCombineFn(self._sum_and_count, finalize=final_stage)
       pcoll |= f'Combine{i}' >> beam.CombinePerKey(combine_fn)
       if not final_stage:
         pcoll |= f'StripBin{i}' >> beam.MapTuple(self._strip_leading_fanout_bin)
