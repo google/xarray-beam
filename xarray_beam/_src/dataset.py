@@ -53,6 +53,11 @@ from xarray_beam._src import rechunk
 from xarray_beam._src import zarr
 
 
+_NAMESPACE = 'xarray_beam.Dataset'
+inc_counter = functools.partial(core.inc_counter, _NAMESPACE)
+inc_timer_msec = functools.partial(core.inc_timer_msec, _NAMESPACE)
+
+
 def _at_least_two_digits(n: int | float) -> str:
   if isinstance(n, int):
     return str(n)
@@ -236,98 +241,110 @@ def _normalize_and_validate_chunk(
 ) -> tuple[core.Key, xarray.Dataset]:
   """Validate and normalize (key, dataset) pairs for a Dataset."""
 
-  if split_vars:
-    if key.vars is None:
-      key = key.replace(vars=set(dataset.keys()))
-    elif key.vars != set(dataset.keys()):
-      raise ValueError(
-          f'dataset keys {sorted(dataset.keys())} do not match'
-          f' key.vars={sorted(key.vars)}'
-      )
-  elif key.vars is not None:
-    raise ValueError(f'must not set vars on key if split_vars=False: {key}')
+  name = 'from-ptransform'
+  inc_counter(f'{name}-calls')
+  inc_counter(f'{name}-in-bytes', dataset.nbytes)
 
-  new_offsets = dict(key.offsets)
-  for dim in dataset.dims:
-    if dim not in new_offsets:
-      new_offsets[dim] = 0
-  if len(new_offsets) != len(key.offsets):
-    key = key.replace(offsets=new_offsets)
+  with inc_timer_msec(f'{name}-msec'):
 
-  core._ensure_chunk_is_computed(key, dataset)
-
-  def _with_dataset(msg: str):
-    dataset_repr = textwrap.indent(repr(dataset), prefix='    ')
-    return f'{msg}\nKey: {key}\nDataset chunk:\n{dataset_repr}'
-
-  def _bad_template_error(msg: str):
-    template_repr = textwrap.indent(repr(template), prefix='    ')
-    raise ValueError(_with_dataset(msg) + f'Template:\n{template_repr}')
-
-  for k, v in dataset.items():
-    if k not in template:
-      _bad_template_error(
-          f'Chunk variable {k!r} not found in template variables '
-          f' {list(template.data_vars)}:'
-      )
-    if v.dtype != template[k].dtype:
-      _bad_template_error(
-          f'Chunk variable {k!r} has dtype {v.dtype} which does not match'
-          f' template variable dtype {template[k].dtype}:'
-      )
-    if v.dims != template[k].dims:
-      _bad_template_error(
-          f'Chunk variable {k!r} has dims {v.dims} which does not match'
-          f' template variable dims {template[k].dims}:'
-      )
-
-  for dim, size in dataset.sizes.items():
-    if dim not in chunks:
-      raise ValueError(
-          _with_dataset(
-              f'Dataset dimension {dim!r} not found in chunks {chunks}:'
-          )
-      )
-    offset = key.offsets[dim]
-    if offset % chunks[dim] != 0:
-      raise ValueError(
-          _with_dataset(
-              f'Chunk offset {offset} is not aligned with chunk '
-              f'size {chunks[dim]} for dimension {dim!r}:'
-          )
-      )
-    if offset + size > template.sizes[dim]:
-      _bad_template_error(
-          f'Chunk dimension {dim!r} has size {size} which is larger than the '
-          f'remaining size {template.sizes[dim] - offset} in the '
-          'template:'
-      )
-    is_last_chunk = offset + chunks[dim] > template.sizes[dim]
-    if is_last_chunk:
-      expected_size = template.sizes[dim] - offset
-      if size != expected_size:
-        _bad_template_error(
-            f'Chunk dimension {dim!r} is the last chunk, but has size {size} '
-            f'which does not match expected size {expected_size}:'
+    if split_vars:
+      if key.vars is None:
+        key = key.replace(vars=set(dataset.keys()))
+      elif key.vars != set(dataset.keys()):
+        raise ValueError(
+            f'dataset keys {sorted(dataset.keys())} do not match'
+            f' key.vars={sorted(key.vars)}'
         )
-    elif size != chunks[dim]:
-      _bad_template_error(
-          f'Chunk dimension {dim!r} has size {size} which does not match'
-          f' chunk size {chunks[dim]}:'
-      )
+    elif key.vars is not None:
+      raise ValueError(f'must not set vars on key if split_vars=False: {key}')
+
+    new_offsets = dict(key.offsets)
+    for dim in dataset.dims:
+      if dim not in new_offsets:
+        new_offsets[dim] = 0
+    if len(new_offsets) != len(key.offsets):
+      key = key.replace(offsets=new_offsets)
+
+    core._ensure_chunk_is_computed(key, dataset)
+
+    def _with_dataset(msg: str):
+      dataset_repr = textwrap.indent(repr(dataset), prefix='    ')
+      return f'{msg}\nKey: {key}\nDataset chunk:\n{dataset_repr}'
+
+    def _bad_template_error(msg: str):
+      template_repr = textwrap.indent(repr(template), prefix='    ')
+      raise ValueError(_with_dataset(msg) + f'Template:\n{template_repr}')
+
+    for k, v in dataset.items():
+      if k not in template:
+        _bad_template_error(
+            f'Chunk variable {k!r} not found in template variables '
+            f' {list(template.data_vars)}:'
+        )
+      if v.dtype != template[k].dtype:
+        _bad_template_error(
+            f'Chunk variable {k!r} has dtype {v.dtype} which does not match'
+            f' template variable dtype {template[k].dtype}:'
+        )
+      if v.dims != template[k].dims:
+        _bad_template_error(
+            f'Chunk variable {k!r} has dims {v.dims} which does not match'
+            f' template variable dims {template[k].dims}:'
+        )
+
+    for dim, size in dataset.sizes.items():
+      if dim not in chunks:
+        raise ValueError(
+            _with_dataset(
+                f'Dataset dimension {dim!r} not found in chunks {chunks}:'
+            )
+        )
+      offset = key.offsets[dim]
+      if offset % chunks[dim] != 0:
+        raise ValueError(
+            _with_dataset(
+                f'Chunk offset {offset} is not aligned with chunk '
+                f'size {chunks[dim]} for dimension {dim!r}:'
+            )
+        )
+      if offset + size > template.sizes[dim]:
+        _bad_template_error(
+            f'Chunk dimension {dim!r} has size {size} which is larger than the '
+            f'remaining size {template.sizes[dim] - offset} in the '
+            'template:'
+        )
+      is_last_chunk = offset + chunks[dim] > template.sizes[dim]
+      if is_last_chunk:
+        expected_size = template.sizes[dim] - offset
+        if size != expected_size:
+          _bad_template_error(
+              f'Chunk dimension {dim!r} is the last chunk, but has size {size} '
+              f'which does not match expected size {expected_size}:'
+          )
+      elif size != chunks[dim]:
+        _bad_template_error(
+            f'Chunk dimension {dim!r} has size {size} which does not match'
+            f' chunk size {chunks[dim]}:'
+        )
 
   return key, dataset
 
 
 def _apply_to_each_chunk(
     func: Callable[[xarray.Dataset], xarray.Dataset],
+    name: str,
     old_chunks: Mapping[str, int],
     new_chunks: Mapping[str, int],
     key: core.Key,
     chunk: xarray.Dataset,
 ) -> tuple[core.Key, xarray.Dataset]:
   """Apply a function to each chunk."""
-  new_chunk = func(chunk)
+  inc_counter(f'{name}-calls')
+  inc_counter(f'{name}-in-bytes', chunk.nbytes)
+  with inc_timer_msec(f'{name}-msec'):
+    new_chunk = func(chunk)
+  inc_counter(f'{name}-out-bytes', chunk.nbytes)
+
   new_offsets = {}
   for dim in new_chunk.dims:
     assert isinstance(dim, str)
@@ -362,7 +379,13 @@ def _whole_dataset_method(method_name: str):
       ptransform.label = _concat_labels(self.ptransform.label, label)
     else:
       ptransform = self.ptransform | label >> beam.MapTuple(
-          functools.partial(_apply_to_each_chunk, func, self.chunks, chunks)
+          functools.partial(
+              _apply_to_each_chunk,
+              func,
+              method_name,
+              self.chunks,
+              chunks
+          )
       )
     return Dataset(template, chunks, self.split_vars, ptransform)
 
@@ -804,8 +827,10 @@ class Dataset:
       )  # pytype: disable=wrong-arg-types
 
     label = _get_label('map_blocks')
+    func_name = getattr(func, '__name__', None)
+    name = f'map-blocks-{func_name}' if func_name else 'map-blocks'
     ptransform = self.ptransform | label >> beam.MapTuple(
-        functools.partial(_apply_to_each_chunk, func, self.chunks, chunks)
+        functools.partial(_apply_to_each_chunk, func, name, self.chunks, chunks)
     )
     return type(self)(template, chunks, self.split_vars, ptransform)
 
