@@ -58,13 +58,24 @@ _DEFAULT = object()
 class Key:
   """Key for keeping track of chunks of a distributed Dataset.
 
-  Key object in Xarray-Beam include two components:
+  Key objects in Xarray-Beam include two components:
 
-  - "offsets": an immutable dict indicating integer offsets (total number of
+  - `offsets`: an immutable dict indicating integer offsets (total number of
     array elements) from the origin along each dimension for this chunk.
-  - "vars": either an frozenset or None, indicating the subset of Dataset
+  - `vars`: either an frozenset or None, indicating the subset of Dataset
     variables included in this chunk. The default value of None means that all
     variables are included.
+
+  Alternatively, `indices` may be specified instead of `offsets`. This is a
+  newer data model that is not yet fully supported:
+
+  - `indices`: an immutable dict indicating integer chunk indices from the
+    origin along each dimension for this chunk.
+
+  `offsets` and `indices` are mutually exclusive: only one of them may be used
+  for any given `Key`. For example, if there are chunks of size 100 along the
+  'x' dimension, then ``offsets={'x': 400}`` would correspond to
+  ``indices={'x': 4}``.
 
   Key objects are "deterministically encoded" by Beam, which makes them suitable
   for use as keys in Beam pipelines, i.e., with beam.GroupByKey. They are also
@@ -102,6 +113,15 @@ class Key:
 
     >>> key.replace(vars=None)
     Key(offsets={'x': 10})
+
+  You can use `indices` instead of `offsets` to refer to chunks by index::
+
+    >>> key = xarray_beam.Key(indices={'x': 4}, vars={'bar'})
+    >>> key
+    Key(indices={'x': 4}, vars={'bar'})
+    >>> key.with_indices(x=5)
+    Key(indices={'x': 5}, vars={'bar'})
+
   """
 
   # pylint: disable=redefined-builtin
@@ -110,25 +130,34 @@ class Key:
       self,
       offsets: Mapping[str, int] | None = None,
       vars: Set[str] | None = None,
+      indices: Mapping[str, int] | None = None,
   ):
+    if offsets and indices:
+      raise ValueError("offsets and indices are mutually exclusive")
     if offsets is None:
       offsets = {}
+    if indices is None:
+      indices = {}
     if isinstance(vars, str):
       raise TypeError(f"vars must be a set or None, but is {vars!r}")
     self.offsets = immutabledict.immutabledict(offsets)
+    self.indices = immutabledict.immutabledict(indices)
     self.vars = None if vars is None else frozenset(vars)
 
   def replace(
       self,
       offsets: Mapping[str, int] | object = _DEFAULT,
       vars: Set[str] | None | object = _DEFAULT,
+      indices: Mapping[str, int] | object = _DEFAULT,
   ) -> Key:
     """Replace one or more components of this Key with new values."""
     if offsets is _DEFAULT:
       offsets = self.offsets
     if vars is _DEFAULT:
       vars = self.vars
-    return type(self)(offsets, vars)
+    if indices is _DEFAULT:
+      indices = self.indices
+    return type(self)(offsets, vars, indices)
 
   def with_offsets(self, **offsets: int | None) -> Key:
     """Replace some offsets with new values.
@@ -140,6 +169,8 @@ class Key:
     Returns:
       New Key with the specified offsets.
     """
+    if self.indices:
+      raise ValueError("cannot call with_offsets on a Key with indices")
     new_offsets = dict(self.offsets)
     for k, v in offsets.items():
       if v is None:
@@ -148,21 +179,47 @@ class Key:
         new_offsets[k] = v
     return self.replace(offsets=new_offsets)
 
+  def with_indices(self, **indices: int | None) -> Key:
+    """Replace some indices with new values.
+
+    Args:
+      **indices: indices to override (for integer values) or remove, with
+        values of ``None``.
+
+    Returns:
+      New Key with the specified indices.
+    """
+    if self.offsets:
+      raise ValueError("cannot call with_indices on a Key with offsets")
+    new_indices = dict(self.indices)
+    for k, v in indices.items():
+      if v is None:
+        del new_indices[k]
+      else:
+        new_indices[k] = v
+    return self.replace(indices=new_indices)
+
   def __repr__(self) -> str:
     components = []
     if self.offsets:
       components.append(f"offsets={dict(self.offsets)}")
+    if self.indices:
+      components.append(f"indices={dict(self.indices)}")
     if self.vars is not None:
       components.append(f"vars={set(self.vars)}")
     return f"{type(self).__name__}({', '.join(components)})"
 
   def __hash__(self) -> int:
-    return hash((self.offsets, self.vars))
+    return hash((self.offsets, self.vars, self.indices))
 
   def __eq__(self, other) -> bool:
     if not isinstance(other, Key):
       return NotImplemented
-    return self.offsets == other.offsets and self.vars == other.vars
+    return (
+        self.offsets == other.offsets
+        and self.indices == other.indices
+        and self.vars == other.vars
+    )
 
   def __ne__(self, other) -> bool:
     return not self == other
@@ -170,9 +227,10 @@ class Key:
   # Beam uses these methods (also used for pickling) for "deterministic
   # encoding" of groupby keys
   def __getstate__(self):
-    offsets_state = sorted(self.offsets.items())
+    offsets_state = sorted(self.offsets.items()) if self.offsets else None
     vars_state = None if self.vars is None else sorted(self.vars)
-    return offsets_state, vars_state
+    indices_state = sorted(self.indices.items()) if self.indices else None
+    return offsets_state, vars_state, indices_state
 
   def __setstate__(self, state):
     self.__init__(*state)

@@ -47,6 +47,17 @@ class KeyTest(test_util.TestCase):
     with self.assertRaisesRegex(TypeError, 'vars must be a set or None'):
       xbeam.Key(vars='foo')
 
+    key = xbeam.Key(indices={'x': 0, 'y': 1})
+    self.assertIsInstance(key.indices, immutabledict.immutabledict)
+    self.assertEqual(dict(key.indices), {'x': 0, 'y': 1})
+    self.assertEqual(dict(key.offsets), {})
+    self.assertIsNone(key.vars)
+
+    with self.assertRaisesRegex(
+        ValueError, 'offsets and indices are mutually exclusive'
+    ):
+      xbeam.Key(offsets={'x': 0}, indices={'x': 0})
+
   def test_replace(self):
     key = xbeam.Key({'x': 0}, {'foo'})
 
@@ -74,6 +85,33 @@ class KeyTest(test_util.TestCase):
     actual = key.replace({'y': 1}, {'bar'})
     self.assertEqual(expected, actual)
 
+  def test_replace_with_indices(self):
+    key_i = xbeam.Key(indices={'x': 0}, vars={'foo'})
+
+    expected = xbeam.Key(indices={'x': 1}, vars={'foo'})
+    actual = key_i.replace(indices={'x': 1})
+    self.assertEqual(expected, actual)
+
+    expected = xbeam.Key(indices={'y': 1}, vars={'foo'})
+    actual = key_i.replace(indices={'y': 1})
+    self.assertEqual(expected, actual)
+
+    expected = xbeam.Key(indices={'x': 0})
+    actual = key_i.replace(vars=None)
+    self.assertEqual(expected, actual)
+
+    expected = xbeam.Key(indices={'x': 0}, vars={'bar'})
+    actual = key_i.replace(vars={'bar'})
+    self.assertEqual(expected, actual)
+
+    expected = xbeam.Key(indices={'y': 1}, vars={'foo'})
+    actual = key_i.replace(indices={'y': 1}, vars={'foo'})
+    self.assertEqual(expected, actual)
+
+    expected = xbeam.Key(indices={'y': 1}, vars={'bar'})
+    actual = key_i.replace(indices={'y': 1}, vars={'bar'})
+    self.assertEqual(expected, actual)
+
   def test_with_offsets(self):
     key = xbeam.Key({'x': 0})
 
@@ -98,6 +136,42 @@ class KeyTest(test_util.TestCase):
     actual = key2.with_offsets(x=1)
     self.assertEqual(expected, actual)
 
+    key_i = xbeam.Key(indices={'x': 0})
+    with self.assertRaisesRegex(
+        ValueError, 'cannot call with_offsets on a Key with indices'
+    ):
+      key_i.with_offsets(x=1)
+
+  def test_with_indices(self):
+    key = xbeam.Key(indices={'x': 0})
+
+    expected = xbeam.Key(indices={'x': 1})
+    actual = key.with_indices(x=1)
+    self.assertEqual(expected, actual)
+
+    expected = xbeam.Key(indices={'x': 0, 'y': 1})
+    actual = key.with_indices(y=1)
+    self.assertEqual(expected, actual)
+
+    expected = xbeam.Key(indices={})
+    actual = key.with_indices(x=None)
+    self.assertEqual(expected, actual)
+
+    expected = xbeam.Key(indices={'y': 1, 'z': 2})
+    actual = key.with_indices(x=None, y=1, z=2)
+    self.assertEqual(expected, actual)
+
+    key2 = xbeam.Key(indices={'x': 0}, vars={'foo'})
+    expected = xbeam.Key(indices={'x': 1}, vars={'foo'})
+    actual = key2.with_indices(x=1)
+    self.assertEqual(expected, actual)
+
+    key_o = xbeam.Key(offsets={'x': 0})
+    with self.assertRaisesRegex(
+        ValueError, 'cannot call with_indices on a Key with offsets'
+    ):
+      key_o.with_indices(x=1)
+
   def test_repr(self):
     key = xbeam.Key({'x': 0, 'y': 10})
     expected = "Key(offsets={'x': 0, 'y': 10})"
@@ -105,6 +179,10 @@ class KeyTest(test_util.TestCase):
 
     key = xbeam.Key(vars={'foo'})
     expected = "Key(vars={'foo'})"
+    self.assertEqual(repr(key), expected)
+
+    key = xbeam.Key(indices={'x': 0, 'y': 1})
+    expected = "Key(indices={'x': 0, 'y': 1})"
     self.assertEqual(repr(key), expected)
 
   def test_dict_key(self):
@@ -115,12 +193,24 @@ class KeyTest(test_util.TestCase):
   def test_equality(self):
     key = xbeam.Key({'x': 0, 'y': 10})
     self.assertEqual(key, key)
-    self.assertNotEqual(key, None)
 
     key2 = xbeam.Key({'x': 0, 'y': 10}, {'bar'})
     self.assertEqual(key2, key2)
     self.assertNotEqual(key, key2)
     self.assertNotEqual(key2, key)
+
+    key_i = xbeam.Key(indices={'x': 0, 'y': 1})
+    self.assertEqual(key_i, key_i)
+    self.assertNotEqual(key_i, key)
+    self.assertNotEqual(key, key_i)
+
+    key_o = xbeam.Key(offsets={'x': 0, 'y': 1})
+    self.assertNotEqual(key_i, key_o)
+
+    key_i2 = xbeam.Key(indices={'x': 0, 'y': 1}, vars={'bar'})
+    self.assertEqual(key_i2, key_i2)
+    self.assertNotEqual(key_i, key_i2)
+    self.assertNotEqual(key_i2, key_i)
 
   def test_offsets_as_beam_key(self):
     inputs = [
@@ -131,6 +221,19 @@ class KeyTest(test_util.TestCase):
     expected = [
         (xbeam.Key({'x': 0, 'y': 1}), [1, 3]),
         (xbeam.Key({'x': 0, 'y': 2}), [2]),
+    ]
+    actual = inputs | beam.GroupByKey()
+    self.assertEqual(actual, expected)
+
+  def test_indices_as_beam_key(self):
+    inputs = [
+        (xbeam.Key(indices={'x': 0, 'y': 1}), 1),
+        (xbeam.Key(indices={'x': 0, 'y': 2}), 2),
+        (xbeam.Key(indices={'y': 1, 'x': 0}), 3),
+    ]
+    expected = [
+        (xbeam.Key(indices={'x': 0, 'y': 1}), [1, 3]),
+        (xbeam.Key(indices={'x': 0, 'y': 2}), [2]),
     ]
     actual = inputs | beam.GroupByKey()
     self.assertEqual(actual, expected)
@@ -154,6 +257,10 @@ class KeyTest(test_util.TestCase):
     )
     unpickled = pickle.loads(pickle.dumps(key))
     self.assertEqual(key, unpickled)
+
+    key_i = xbeam.Key(indices={'x': 0, 'y': 1}, vars={'foo'})
+    unpickled_i = pickle.loads(pickle.dumps(key_i))
+    self.assertEqual(key_i, unpickled_i)
 
 
 class TestOffsetsToSlices(test_util.TestCase):
