@@ -974,6 +974,18 @@ class Dataset:
       )
     return self._head(**indexers_kwargs)
 
+  _tail = _whole_dataset_method('tail')
+
+  def tail(self, **indexers_kwargs: int) -> Dataset:
+    """Return a Dataset with the last N elements of each dimension."""
+    if not isinstance(self.ptransform, core.DatasetToChunks):
+      raise ValueError(
+          'tail() is only supported on untransformed datasets, with '
+          'ptransform=DatasetToChunks. This dataset has '
+          f'ptransform={self.ptransform}'
+      )
+    return self._tail(**indexers_kwargs)
+
   # thin wrappers around xarray methods
   __getitem__ = _whole_dataset_method('__getitem__')
   transpose = _whole_dataset_method('transpose')
