@@ -736,9 +736,7 @@ class DatasetTest(test_util.TestCase):
       ds2 = xarray.Dataset({'foo': (('x', 'y'), np.zeros((12, 10)))})
       beam_ds2 = xbeam.Dataset.from_xarray(ds2, {'x': 6, 'y': 5})
       with beam.Pipeline() as p:
-        p |= beam_ds2.to_zarr(
-            temp_dir, zarr_chunks_per_shard={'x': 3, ...: 1}
-        )
+        p |= beam_ds2.to_zarr(temp_dir, zarr_chunks_per_shard={'x': 3, ...: 1})
       opened, chunks = xbeam.open_zarr(temp_dir)
       xarray.testing.assert_identical(ds2, opened)
       self.assertEqual(chunks, {'x': 2, 'y': 5})
@@ -786,7 +784,8 @@ class DatasetTest(test_util.TestCase):
       beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 6})
       with self.assertRaisesRegex(
           ValueError,
-          r'cannot write a dataset with chunks .*zarr_chunks_per_shard=.* which do not evenly divide',
+          r'cannot write a dataset with chunks .*zarr_chunks_per_shard=.* which'
+          r' do not evenly divide',
       ):
         beam_ds.to_zarr(temp_dir, zarr_chunks_per_shard={'x': 5})
 
@@ -1001,6 +1000,27 @@ class MapBlocksTest(test_util.TestCase):
         "New split variables: {'bar'}",
     ):
       source_ds.map_blocks(func)
+
+  def test_map_blocks_non_unique(self):
+    source = xarray.Dataset({'foo': ('x', np.arange(8))})
+    source_ds = xbeam.Dataset.from_xarray(source, {'x': 4})
+    with self.assertRaisesRegex(
+        ValueError,
+        "dimension 'x' has multiple chunks on the source dataset, and "
+        'therefore must be included in the result of map_blocks, but is not '
+        'in the new template:',
+    ):
+      source_ds.map_blocks(lambda ds: ds.mean('x'))
+
+  def test_map_blocks_inconsistent_chunks_error(self):
+    source = xarray.Dataset({'foo': ('x', np.arange(8))})
+    source_ds = xbeam.Dataset.from_xarray(source, {'x': 4})
+    with self.assertRaisesWithLiteralMatch(
+        ValueError,
+        "dimension 'x' has 2 chunks on the source dataset and 8 in the result "
+        'of map_blocks',
+    ):
+      source_ds.map_blocks(lambda ds: ds, chunks={'x': 1})
 
 
 class RechunkingTest(test_util.TestCase):

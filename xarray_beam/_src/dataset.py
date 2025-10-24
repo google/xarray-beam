@@ -828,6 +828,22 @@ class Dataset:
           new_sizes=template.sizes,
       )  # pytype: disable=wrong-arg-types
 
+    for dim, old_chunks in self.chunks.items():
+      if old_chunks < self.sizes[dim]:
+        if dim not in template.dims:
+          raise ValueError(
+              f'dimension {dim!r} has multiple chunks on the source dataset, '
+              'and therefore must be included in the result of map_blocks, but '
+              f'is not in the new template: {template}'
+          )
+        old_chunk_count = math.ceil(self.sizes[dim] / old_chunks)
+        new_chunk_count = math.ceil(template.sizes[dim] / chunks[dim])
+        if old_chunk_count != new_chunk_count:
+          raise ValueError(
+              f'dimension {dim!r} has {old_chunk_count} chunks on the source '
+              f'dataset and {new_chunk_count} in the result of map_blocks'
+          )
+
     label = _get_label('map_blocks')
     func_name = getattr(func, '__name__', None)
     name = f'map-blocks-{func_name}' if func_name else 'map-blocks'
