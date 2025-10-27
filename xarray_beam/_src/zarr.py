@@ -151,12 +151,13 @@ def replace_template_dims(
     template: xarray.Dataset,
     **dim_replacements: int | np.ndarray | pd.Index | xarray.DataArray,
 ) -> xarray.Dataset:
+  # pyformat: disable
   """Replaces dimension(s) in a template with updates coordinates and/or sizes.
 
   This is convenient for creating templates from evaluated results for a
   single chunk.
 
-  Example usage:
+  Example usage::
 
     import numpy as np
     import pandas as pd
@@ -178,27 +179,21 @@ def replace_template_dims(
     # Dimensions:    (time: 1, longitude: 1440, latitude: 721)
     # Coordinates:
     #   * time       (time) datetime64[ns] 8B 1940-01-01
-    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5
-    359.8
-    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75
-    90.0
+    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5 359.8
+    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75 90.0
     # Data variables:
-    #     foo        (time, longitude, latitude) float64 8MB
-    dask.array<chunksize=(1, 1440, 721), meta=np.ndarray>
+    #     foo        (time, longitude, latitude) float64 8MB dask.array<chunksize=(1, 1440, 721), meta=np.ndarray>
 
     template = xbeam.replace_template_dims(template, time=times)
     print(template)
     # <xarray.Dataset> Size: 6TB
     # Dimensions:    (time: 747769, longitude: 1440, latitude: 721)
     # Coordinates:
-    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5
-    359.8
-    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75
-    90.0
+    #   * longitude  (longitude) float64 12kB 0.0 0.25 0.5 0.75 ... 359.2 359.5 359.8
+    #   * latitude   (latitude) float64 6kB -90.0 -89.75 -89.5 ... 89.5 89.75 90.0
     #   * time       (time) datetime64[ns] 6MB 1940-01-01 ... 2025-04-21
     # Data variables:
-    #     foo        (time, longitude, latitude) float64 6TB
-    dask.array<chunksize=(747769, 1440, 721), meta=np.ndarray>
+    #     foo        (time, longitude, latitude) float64 6TB dask.array<chunksize=(747769, 1440, 721), meta=np.ndarray>
 
   Args:
     template: The template to replace dimensions in.
@@ -209,7 +204,8 @@ def replace_template_dims(
   Returns:
     Template with the replaced dimensions.
   """
-  expansions = {}
+  # pyformat: enable
+  expansions_with_axes = {}
   for name, variable in template.items():
     if variable.chunks is None:
       raise ValueError(
@@ -217,14 +213,16 @@ def replace_template_dims(
           ' xarray_beam.make_template() to create a valid template before '
           f' calling replace_template_dims(): {template}'
       )
-    expansions[name] = {
-        dim: replacement
-        for dim, replacement in dim_replacements.items()
-        if dim in variable.dims
-    }
+    # identify which dimensions of this variable need to be replaced, in order
+    dims_to_replace = [dim for dim in variable.dims if dim in dim_replacements]
+    if dims_to_replace:
+      expansions = {dim: dim_replacements[dim] for dim in dims_to_replace}
+      axes = [variable.dims.index(dim) for dim in dims_to_replace]
+      expansions_with_axes[name] = (expansions, axes)
+
   template = template.isel({dim: 0 for dim in dim_replacements}, drop=True)
-  for name, variable in template.items():
-    template[name] = variable.expand_dims(expansions[name])
+  for name, (expansions, axes) in expansions_with_axes.items():
+    template[name] = template[name].expand_dims(expansions, axis=axes)
   return template
 
 

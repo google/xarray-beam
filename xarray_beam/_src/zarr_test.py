@@ -182,6 +182,17 @@ class DatasetToZarrTest(test_util.TestCase):
     self.assertIsInstance(new_template.bar.data, da.Array)
     self.assertIsInstance(new_template.baz.data, da.Array)
 
+  def test_replace_template_dims_multiple_dims_unordered(self):
+    source = xarray.Dataset(
+        {'foo': (('x', 'y', 'z'), np.zeros((1, 2, 3)))},
+        coords={'x': [0], 'y': [10, 20], 'z': [1, 2, 3]},
+    )
+    template = xbeam.make_template(source)
+    new_template = xbeam.replace_template_dims(template, z=4, x=5)
+
+    self.assertEqual(new_template.sizes, {'x': 5, 'y': 2, 'z': 4})
+    self.assertEqual(new_template.foo.dims, ('x', 'y', 'z'))
+
   def test_replace_template_dims_error_on_non_template(self):
     source = xarray.Dataset({'foo': ('x', np.zeros(1))})  # Not a template
     with self.assertRaisesRegex(ValueError, 'is not chunked with Dask'):
