@@ -19,6 +19,7 @@ import contextlib
 from functools import cached_property
 import itertools
 import math
+import pickle
 import time
 from typing import Any, Generic, TypeVar
 
@@ -234,6 +235,52 @@ class Key:
 
   def __setstate__(self, state):
     self.__init__(*state)
+
+
+class _PickleCoder(beam.coders.Coder):
+  """Base class for Xarray-Beam coders that use pickle."""
+
+  def encode(self, value: Any) -> bytes:
+    return pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+
+  def decode(self, encoded: bytes) -> Any:
+    return pickle.loads(encoded)
+
+
+class KeyCoder(_PickleCoder):
+  """Custom coder for Key."""
+
+  def is_deterministic(self) -> bool:
+    return True
+
+  def estimate_size(self, value: Key) -> int:
+    return len(self.encode(value))
+
+  def to_type_hint(self) -> type[Key]:
+    return Key
+
+
+# Register a coder for Key, to silence warnings about using the fallback
+# deterministic coder.
+beam.coders.registry.register_coder(Key, KeyCoder)
+
+
+class DatasetCoder(_PickleCoder):
+  """Custom coder for xarray.Dataset."""
+
+  def is_deterministic(self) -> bool:
+    return False
+
+  def estimate_size(self, value: xarray.Dataset) -> int:
+    return value.nbytes
+
+  def to_type_hint(self) -> type[xarray.Dataset]:
+    return xarray.Dataset
+
+
+# I'm not 100% sure if this is used anywhere (I don't see warnings about
+# xarray.Dataset using a fall-back coder), but it can't hurt to add it.
+beam.coders.registry.register_coder(xarray.Dataset, DatasetCoder)
 
 
 K = TypeVar("K")

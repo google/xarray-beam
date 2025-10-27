@@ -299,6 +299,19 @@ class TestOffsetsToSlices(test_util.TestCase):
     self.assertEqual(slices, expected)
 
 
+class CodersTest(test_util.TestCase):
+
+  def test_no_fallback_deterministic_coder_warnings(self):
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
+    inputs = [
+        (xbeam.Key({'x': 0}), dataset.head(x=3)),
+        (xbeam.Key({'x': 3}), dataset.tail(x=3)),
+    ]
+    with self.assertNoLogs(level='WARNING'):
+      with beam.Pipeline(runner='DirectRunner') as p:
+        p | beam.Create(inputs) | beam.GroupByKey()
+
+
 class DatasetToChunksTest(test_util.TestCase):
 
   def test_iter_chunk_keys(self):
