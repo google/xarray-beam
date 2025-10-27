@@ -602,6 +602,24 @@ class DatasetTest(test_util.TestCase):
     collected = beam_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(ds, collected)
 
+  def test_from_zarr_with_pipeline(self):
+    temp_dir = self.create_tempdir().full_path
+    output_path = self.create_tempdir().full_path
+    ds = xarray.Dataset({'foo': ('x', np.arange(10))})
+    ds.chunk({'x': 5}).to_zarr(temp_dir)
+
+    with beam.Pipeline() as pipeline:
+      beam_ds = xbeam.Dataset.from_zarr(temp_dir, pipeline=pipeline)
+      self.assertIsInstance(beam_ds._ptransform, xbeam_dataset._LazyPCollection)
+      self.assertRegex(
+          repr(beam_ds),
+          r'PTransform: _LazyPCollection\(pipeline=.+, ptransform=.+\)',
+      )
+      beam_ds.to_zarr(output_path)
+
+    opened = xarray.open_zarr(output_path)
+    xarray.testing.assert_identical(ds, opened)
+
   def test_from_zarr_with_chunks(self):
     temp_dir = self.create_tempdir().full_path
     ds = xarray.Dataset({'foo': (('x', 'y'), np.zeros((100, 100)))})
@@ -802,6 +820,16 @@ class DatasetTest(test_util.TestCase):
     xarray.testing.assert_identical(ds, opened)
     self.assertEqual(chunks, {'x': 2, 'y': 2})
 
+  def test_from_xarray_to_zarr_with_pipeline(self):
+    path = self.create_tempdir().full_path
+    ds = xarray.Dataset({'foo': ('x', np.arange(10))})
+    with beam.Pipeline() as pipeline:
+      beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5}, pipeline=pipeline)
+      self.assertIsInstance(beam_ds.ptransform, beam.PCollection)
+      beam_ds.to_zarr(path)
+    actual = xarray.open_zarr(path)
+    xarray.testing.assert_identical(ds, actual)
+
   @parameterized.named_parameters(
       dict(testcase_name='getitem', call=lambda x: x[['foo']]),
       dict(testcase_name='transpose', call=lambda x: x.transpose()),
@@ -847,6 +875,18 @@ class DatasetTest(test_util.TestCase):
         ),
     ):
       beam_ds.map_blocks(lambda x: x).head(x=2)
+
+  def test_head_with_pipeline(self):
+    ds = xarray.Dataset({'foo': ('x', np.arange(10))})
+    path = self.create_tempdir().full_path
+    with beam.Pipeline() as pipeline:
+      beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5}, pipeline=pipeline)
+      head_ds = beam_ds.head(x=2)
+      self.assertIsInstance(head_ds._ptransform, xbeam_dataset._LazyPCollection)
+      head_ds.to_zarr(path)
+    actual = xarray.open_zarr(path)
+    expected = ds.head(x=2)
+    xarray.testing.assert_identical(expected, actual)
 
   def test_tail(self):
     ds = xarray.Dataset({'foo': ('x', np.arange(10))})
@@ -1078,6 +1118,22 @@ class RechunkingTest(test_util.TestCase):
     actual = rechunked_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, source)
 
+  def test_rechunk_from_xarray_with_pipeline(self):
+    source = xarray.Dataset({'foo': (('x', 'y'), np.zeros((100, 100)))})
+    path = self.create_tempdir().full_path
+    with beam.Pipeline() as pipeline:
+      beam_ds = xbeam.Dataset.from_xarray(
+          source, {'x': 10, 'y': 10}, pipeline=pipeline
+      )
+      rechunked_ds = beam_ds.rechunk({'x': 20, 'y': 20})
+      self.assertEqual(rechunked_ds.chunks, {'x': 20, 'y': 20})
+      self.assertIsInstance(
+          rechunked_ds._ptransform, xbeam_dataset._LazyPCollection
+      )
+      rechunked_ds.to_zarr(path)
+    actual = xarray.open_zarr(path)
+    xarray.testing.assert_identical(actual, source)
+
   def test_rechunk_with_existing_split_vars(self):
     source = xarray.Dataset({
         'foo': (('x', 'y'), np.arange(20).reshape(10, 2)),
@@ -1113,6 +1169,50 @@ class RechunkingTest(test_util.TestCase):
     self.assertEqual(rechunked_ds.split_vars, target_split)
     actual = rechunked_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, source)
+
+
+class MeanTest(test_util.TestCase):
+
+  @parameterized.named_parameters(
+      dict(testcase_name='x', dim='x', skipna=True),
+      dict(testcase_name='y', dim='y', skipna=True),
+      dict(testcase_name='two_dims', dim=['x', 'y'], skipna=True),
+      dict(testcase_name='all_dims', dim=None, skipna=True),
+      dict(testcase_name='skipna_false', dim='y', skipna=False),
+  )
+  def test_mean(self, dim, skipna):
+    source_ds = xarray.Dataset(
+        {'foo': (('x', 'y'), np.array([[1, 2, np.nan], [4, np.nan, 6]]))}
+    )
+    beam_ds = xbeam.Dataset.from_xarray(source_ds, chunks={'x': 1})
+    actual = beam_ds.mean(dim=dim, skipna=skipna)
+    expected = source_ds.mean(dim=dim, skipna=skipna)
+    actual_collected = actual.collect_with_direct_runner()
+    xarray.testing.assert_allclose(expected, actual_collected)
+
+  def test_mean_large_array_cases(self):
+    source_ds = xarray.Dataset(
+        {'foo': (('x', 'y'), np.arange(1000_000).reshape(1000, 1000))}
+    )
+    beam_ds = xbeam.Dataset.from_xarray(source_ds, chunks={'x': 100, 'y': 1000})
+
+    with self.subTest('dim=y'):
+      actual = beam_ds.mean(dim='y')
+      expected = source_ds.mean(dim='y')
+      actual_collected = actual.collect_with_direct_runner()
+      xarray.testing.assert_allclose(expected, actual_collected)
+
+    with self.subTest('dim=x'):
+      actual = beam_ds.mean(dim='x')
+      expected = source_ds.mean(dim='x')
+      actual_collected = actual.collect_with_direct_runner()
+      xarray.testing.assert_allclose(expected, actual_collected)
+
+    with self.subTest('dim=[x,y]'):
+      actual = beam_ds.mean(dim=['x', 'y'])
+      expected = source_ds.mean(dim=['x', 'y'])
+      actual_collected = actual.collect_with_direct_runner()
+      xarray.testing.assert_allclose(expected, actual_collected)
 
 
 class EndToEndTest(test_util.TestCase):
@@ -1210,6 +1310,36 @@ class EndToEndTest(test_util.TestCase):
     xarray.testing.assert_identical(expected, actual)
     self.assertEqual(chunks, {'time': 10, 'latitude': 73, 'longitude': 144})
 
+  def test_multiple_analysis_ready_outputs(self):
+    input_path = self.create_tempdir('source').full_path
+    temporal_path = self.create_tempdir('temporal').full_path
+    climatology_path = self.create_tempdir('climatology').full_path
+
+    source_ds = test_util.dummy_era5_surface_dataset(
+        latitudes=73, longitudes=144, times=365, freq='24H'
+    )
+    source_ds.chunk({'time': 30}).to_zarr(input_path)
+
+    with beam.Pipeline() as p:
+      ds_spatial = xbeam.Dataset.from_zarr(input_path, pipeline=p)
+
+      ds_temporal = ds_spatial.rechunk({'time': -1, ...: '10MB'})
+      out_temporal = ds_temporal.to_zarr(temporal_path)
+
+      out_climatology = (
+          ds_temporal.map_blocks(lambda x: x.groupby('time.month').mean())
+          .rechunk(-1)
+          .to_zarr(climatology_path)
+      )
+      self.assertIs(out_temporal.pipeline, out_climatology.pipeline)
+
+    actual_temporal = xarray.open_zarr(temporal_path)
+    xarray.testing.assert_identical(source_ds, actual_temporal)
+
+    expected_climatology = source_ds.groupby('time.month').mean()
+    actual_climatology = xarray.open_zarr(climatology_path)
+    xarray.testing.assert_identical(expected_climatology, actual_climatology)
+
   def test_from_ptransform_docs_example(self):
     source_ds = test_util.dummy_era5_surface_dataset(
         times=5, freq='1D', latitudes=3, longitudes=4
@@ -1230,50 +1360,6 @@ class EndToEndTest(test_util.TestCase):
     )
     actual = ds_beam.collect_with_direct_runner()
     xarray.testing.assert_identical(source_ds, actual)
-
-
-class MeanTest(test_util.TestCase):
-
-  @parameterized.named_parameters(
-      dict(testcase_name='x', dim='x', skipna=True),
-      dict(testcase_name='y', dim='y', skipna=True),
-      dict(testcase_name='two_dims', dim=['x', 'y'], skipna=True),
-      dict(testcase_name='all_dims', dim=None, skipna=True),
-      dict(testcase_name='skipna_false', dim='y', skipna=False),
-  )
-  def test_mean(self, dim, skipna):
-    source_ds = xarray.Dataset(
-        {'foo': (('x', 'y'), np.array([[1, 2, np.nan], [4, np.nan, 6]]))}
-    )
-    beam_ds = xbeam.Dataset.from_xarray(source_ds, chunks={'x': 1})
-    actual = beam_ds.mean(dim=dim, skipna=skipna)
-    expected = source_ds.mean(dim=dim, skipna=skipna)
-    actual_collected = actual.collect_with_direct_runner()
-    xarray.testing.assert_allclose(expected, actual_collected)
-
-  def test_mean_large_array_cases(self):
-    source_ds = xarray.Dataset(
-        {'foo': (('x', 'y'), np.arange(1000_000).reshape(1000, 1000))}
-    )
-    beam_ds = xbeam.Dataset.from_xarray(source_ds, chunks={'x': 100, 'y': 1000})
-
-    with self.subTest('dim=y'):
-      actual = beam_ds.mean(dim='y')
-      expected = source_ds.mean(dim='y')
-      actual_collected = actual.collect_with_direct_runner()
-      xarray.testing.assert_allclose(expected, actual_collected)
-
-    with self.subTest('dim=x'):
-      actual = beam_ds.mean(dim='x')
-      expected = source_ds.mean(dim='x')
-      actual_collected = actual.collect_with_direct_runner()
-      xarray.testing.assert_allclose(expected, actual_collected)
-
-    with self.subTest('dim=[x,y]'):
-      actual = beam_ds.mean(dim=['x', 'y'])
-      expected = source_ds.mean(dim=['x', 'y'])
-      actual_collected = actual.collect_with_direct_runner()
-      xarray.testing.assert_allclose(expected, actual_collected)
 
 
 if __name__ == '__main__':
