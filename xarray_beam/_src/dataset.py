@@ -392,7 +392,6 @@ def _whole_dataset_method(method_name: str):
   return method
 
 
-
 class _CountNamer:
 
   def __init__(self):
@@ -408,6 +407,7 @@ _get_label = _CountNamer().apply
 @dataclasses.dataclass(frozen=True)
 class _LazyPCollection:
   """Pipeline and PTransform not yet been combined into a PCollection."""
+
   # Beam does not provide a public API for manipulating Pipeline objects, so
   # instead of applying pipelines eagerly, we store them in this wrapper. This
   # allows for performance optimizations specialized to Xarray-Beam PTransforms,
@@ -715,12 +715,16 @@ class Dataset:
       zarr_chunks: Mapping[str, int],
       chunks_name: Literal['shards', 'chunks'],
   ) -> None:
-    if any(self.chunks[k] % zarr_chunks[k] for k in self.chunks):
-      raise ValueError(
-          f'cannot write a dataset with chunks {self.chunks} to Zarr with '
-          f'{chunks_name} {zarr_chunks}, which do not divide evenly into '
-          f'{chunks_name}'
-      )
+    for k in self.chunks:
+      if (
+          self.chunks[k] % zarr_chunks[k]
+          and self.chunks[k] != self.template.sizes[k]
+      ):
+        raise ValueError(
+            f'cannot write a dataset with chunks {self.chunks} to Zarr with '
+            f'{chunks_name} {zarr_chunks}, which do not divide evenly into '
+            f'{chunks_name}'
+        )
 
   def to_zarr(
       self,
@@ -804,6 +808,16 @@ class Dataset:
         previous_chunks=self.chunks,
     )
     if zarr_shards is not None:
+      # Zarr shards are currently constrained to be an integer multiple of
+      # chunk sizes, which means shard sizes must be rounded up to be larger
+      # than the full dimension size. This will likely be relaxed in the future:
+      # https://github.com/zarr-developers/zarr-extensions/issues/34
+      zarr_shards = dict(zarr_shards)
+      for k in zarr_shards:
+        if zarr_shards[k] == self.sizes[k]:
+          zarr_shards[k] = (
+              math.ceil(zarr_shards[k] / zarr_chunks[k]) * zarr_chunks[k]
+          )
       self._check_shards_or_chunks(zarr_shards, 'shards')
     else:
       self._check_shards_or_chunks(zarr_chunks, 'chunks')
@@ -956,9 +970,7 @@ class Dataset:
     ):
       # Rechunking can be performed by re-reading the source dataset with new
       # chunks, rather than using a separate rechunking transform.
-      ptransform = core.DatasetToChunks(
-          ptransform.dataset, chunks, split_vars
-      )
+      ptransform = core.DatasetToChunks(ptransform.dataset, chunks, split_vars)
       ptransform.label = _concat_labels(ptransform.label, label)
       if pipeline is not None:
         ptransform = _LazyPCollection(pipeline, ptransform)

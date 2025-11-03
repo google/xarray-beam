@@ -715,6 +715,28 @@ class DatasetTest(test_util.TestCase):
             zarr_shards={'x': 9},
         )
 
+  @parameterized.named_parameters(
+      dict(testcase_name='empty', zarr_shards={}),
+      dict(testcase_name='minus_one', zarr_shards=-1),
+      dict(testcase_name='explicit_19', zarr_shards={'x': 19}),
+      dict(testcase_name='explicit_20', zarr_shards={'x': 20}),
+  )
+  def test_to_zarr_shards_round_up(self, zarr_shards):
+    temp_dir = self.create_tempdir().full_path
+    ds = xarray.Dataset({'foo': ('x', np.arange(19, dtype='int64'))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 19})
+
+    with beam.Pipeline() as p:
+      p |= beam_ds.to_zarr(
+          temp_dir,
+          zarr_chunks={'x': 10},
+          zarr_shards=zarr_shards,
+      )
+    opened, chunks = xbeam.open_zarr(temp_dir)
+    xarray.testing.assert_identical(ds, opened)
+    self.assertEqual(chunks, {'x': 10})
+    self.assertEqual(opened['foo'].encoding['shards'], (20,))
+
   def test_to_zarr_chunks_per_shard(self):
     temp_dir = self.create_tempdir().full_path
     ds = xarray.Dataset({'foo': ('x', np.arange(12))})
