@@ -13,13 +13,13 @@
 # limitations under the License.
 """Tests for xarray_beam._src.core."""
 
+import pickle
 import re
 from absl.testing import absltest
 from absl.testing import parameterized
 import apache_beam as beam
 import dask.array as da
 import immutabledict
-import pickle
 import numpy as np
 import xarray
 import xarray_beam as xbeam
@@ -252,9 +252,7 @@ class KeyTest(test_util.TestCase):
     self.assertEqual(actual, expected)
 
   def test_pickle(self):
-    key = xbeam.Key(
-        {'x': 0, 'y': 10}, vars={'foo'}
-    )
+    key = xbeam.Key({'x': 0, 'y': 10}, vars={'foo'})
     unpickled = pickle.loads(pickle.dumps(key))
     self.assertEqual(key, unpickled)
 
@@ -653,6 +651,75 @@ class DatasetToChunksTest(test_util.TestCase):
       )
     except ValueError:
       self.fail('should allow a pipeline where the first has more dimensions.')
+
+
+class ReadDatasetTest(test_util.TestCase):
+
+  def test_basics(self):
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
+    expected = [
+        (xbeam.Key({'x': 0}), dataset.head(x=3)),
+        (xbeam.Key({'x': 3}), dataset.tail(x=3)),
+    ]
+    actual = test_util.EagerPipeline() | core.ReadDataset(
+        dataset.chunk({'x': 3})
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+    actual = test_util.EagerPipeline() | core.ReadDataset(
+        dataset, chunks={'x': 3}
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_whole_dataset(self):
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
+    expected = [(xbeam.Key({'x': 0}), dataset)]
+    actual = test_util.EagerPipeline() | core.ReadDataset(
+        dataset, chunks={'x': -1}
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_different_vars(self):
+    dataset = xarray.Dataset({
+        'foo': ('x', np.arange(6)),
+        'bar': ('x', -np.arange(6)),
+    })
+    expected = [
+        (xbeam.Key({'x': 0}, {'foo'}), dataset.head(x=3)[['foo']]),
+        (xbeam.Key({'x': 0}, {'bar'}), dataset.head(x=3)[['bar']]),
+        (xbeam.Key({'x': 3}, {'foo'}), dataset.tail(x=3)[['foo']]),
+        (xbeam.Key({'x': 3}, {'bar'}), dataset.tail(x=3)[['bar']]),
+    ]
+    actual = test_util.EagerPipeline() | core.ReadDataset(
+        dataset, chunks={'x': 3}, split_vars=True
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_split_with_different_dims(self):
+    dataset = xarray.Dataset({
+        'foo': (('x', 'y'), np.array([[1, 2, 3], [4, 5, 6]])),
+        'bar': ('x', np.array([1, 2])),
+        'baz': ('z', np.array([1, 2, 3])),
+    })
+    expected = [
+        (xbeam.Key({'x': 0, 'y': 0}, {'foo'}), dataset[['foo']].head(x=1)),
+        (xbeam.Key({'x': 0}, {'bar'}), dataset[['bar']].head(x=1)),
+        (xbeam.Key({'x': 1, 'y': 0}, {'foo'}), dataset[['foo']].tail(x=1)),
+        (xbeam.Key({'x': 1}, {'bar'}), dataset[['bar']].tail(x=1)),
+        (xbeam.Key({'z': 0}, {'baz'}), dataset[['baz']]),
+    ]
+    actual = test_util.EagerPipeline() | core.ReadDataset(
+        dataset,
+        chunks={'x': 1},
+        split_vars=True,
+    )
+    self.assertIdenticalChunks(actual, expected)
+
+  def test_read_datasets_empty(self):
+    dataset = xarray.Dataset()
+    expected = [(xbeam.Key({}), dataset)]
+    actual = test_util.EagerPipeline() | core.ReadDataset(dataset, chunks={})
+    self.assertIdenticalChunks(actual, expected)
 
 
 class ValidateEachChunkTest(test_util.TestCase):

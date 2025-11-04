@@ -16,11 +16,10 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Any, Callable, Generic, Iterator, TypeVar
+from typing import Callable, Generic, Iterator, TypeVar
 
 import apache_beam as beam
 from apache_beam.io import iobase
-from apache_beam.io import range_trackers
 
 
 _T = TypeVar('_T')
@@ -36,8 +35,8 @@ class RangeSource(iobase.BoundedSource, Generic[_T]):
   Attributes:
     element_count: number of elements in this source.
     element_size: size of each element in bytes.
-    get_element: callable that given an integer index in the range
-      ``[0, element_count)`` returns the corresponding element of the source.
+    get_element: callable that given an integer index in the range ``[0,
+      element_count)`` returns the corresponding element of the source.
   """
 
   element_count: int
@@ -50,8 +49,10 @@ class RangeSource(iobase.BoundedSource, Generic[_T]):
       raise ValueError(
           f'element_count must be non-negative: {self.element_count}'
       )
-    if self.element_size <= 0:
-      raise ValueError(f'element_size must be positive: {self.element_size}')
+    if self.element_size < 0:
+      raise ValueError(
+          f'element_size must be non-negative: {self.element_size}'
+      )
 
   def estimate_size(self) -> int:
     """Estimates the size of source in bytes."""
@@ -68,7 +69,7 @@ class RangeSource(iobase.BoundedSource, Generic[_T]):
     stop = stop_position if stop_position is not None else self.element_count
 
     bundle_size_in_elements = int(
-        math.ceil(desired_bundle_size / self.element_size)
+        math.ceil(desired_bundle_size / max(self.element_size, 1))
     )
     for bundle_start in range(start, stop, bundle_size_in_elements):
       bundle_stop = min(bundle_start + bundle_size_in_elements, stop)
@@ -79,14 +80,14 @@ class RangeSource(iobase.BoundedSource, Generic[_T]):
       self,
       start_position: int | None,
       stop_position: int | None,
-  ) -> range_trackers.OffsetRangeTracker:
+  ) -> beam.io.OffsetRangeTracker:
     """Returns a RangeTracker for a given position range."""
     start = start_position if start_position is not None else 0
     stop = stop_position if stop_position is not None else self.element_count
-    return range_trackers.OffsetRangeTracker(start, stop)
+    return beam.io.OffsetRangeTracker(start, stop)
 
   def read(
-      self, range_tracker: range_trackers.OffsetRangeTracker
+      self, range_tracker: beam.io.OffsetRangeTracker
   ) -> Iterator[_T]:
     """Returns an iterator that reads data from the source."""
     i = range_tracker.start_position()
