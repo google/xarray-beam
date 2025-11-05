@@ -978,6 +978,24 @@ class DatasetTest(test_util.TestCase):
     actual = mapped_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(actual, expected)
 
+  def test_custom_label(self):
+    ds = xarray.Dataset({'foo': ('x', np.arange(10))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5}, label='my_from_xarray')
+    self.assertEqual(beam_ds.ptransform.label, 'my_from_xarray')
+
+    temp_dir = self.create_tempdir().full_path
+    to_zarr = beam_ds.to_zarr(temp_dir, label='my_to_zarr')
+    self.assertEqual(to_zarr.label, 'my_from_xarray|my_to_zarr')
+
+    head = beam_ds.head(x=2, label='my_head')
+    self.assertEqual(head.ptransform.label, 'my_from_xarray|my_head')
+
+    tail = beam_ds.tail(x=2, label='my_tail')
+    self.assertEqual(tail.ptransform.label, 'my_from_xarray|my_tail')
+
+    transpose = beam_ds.transpose(label='my_transpose')
+    self.assertEqual(transpose.ptransform.label, 'my_from_xarray|my_transpose')
+
 
 class MapBlocksTest(test_util.TestCase):
 

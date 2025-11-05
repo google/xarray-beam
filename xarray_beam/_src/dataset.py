@@ -35,6 +35,7 @@ import itertools
 import math
 import operator
 import os.path
+import re
 import tempfile
 import textwrap
 import types
@@ -364,25 +365,28 @@ def _concat_labels(label1: str | None, label2: str) -> str:
 def _whole_dataset_method(method_name: str):
   """Helper function for defining a method with a fast-path for lazy data."""
 
-  def method(self: Dataset, *args, **kwargs) -> Dataset:
+  def method(
+      self: Dataset, *args, label: str | None = None, **kwargs
+  ) -> Dataset:
+    if label is None:
+      label = _get_label(method_name)
+
     func = operator.methodcaller(method_name, *args, **kwargs)
     template = zarr.make_template(func(self.template))
     chunks = {k: v for k, v in self.chunks.items() if k in template.dims}
 
-    label = _get_label(method_name)
-
-    pipeline, ptransform = _split_lazy_pcollection(self._ptransform)
-    if isinstance(ptransform, core.DatasetToChunks):
+    pipeline, old_ptransform = _split_lazy_pcollection(self._ptransform)
+    if isinstance(old_ptransform, core.DatasetToChunks):
       # Some transformations (e.g., indexing) can be applied much less
       # expensively to xarray.Dataset objects rather than via Xarray-Beam. Try
       # to preserve this option for downstream transformations if possible.
-      dataset = func(ptransform.dataset)
+      dataset = func(old_ptransform.dataset)
       ptransform = core.DatasetToChunks(dataset, chunks, self.split_vars)
-      ptransform.label = _concat_labels(ptransform.label, label)
+      ptransform.label = _concat_labels(old_ptransform.label, label)
       if pipeline is not None:
         ptransform = _LazyPCollection(pipeline, ptransform)
     else:
-      ptransform = self.ptransform | label >> beam.MapTuple(
+      ptransform = old_ptransform | label >> beam.MapTuple(
           functools.partial(
               _apply_to_each_chunk, func, method_name, self.chunks, chunks
           )
@@ -558,6 +562,7 @@ class Dataset:
       template: xarray.Dataset,
       chunks: Mapping[str | types.EllipsisType, int],
       split_vars: bool = False,
+      label: str | None = None,
   ) -> Dataset:
     """Create an xarray_beam.Dataset from a Beam PTransform.
 
@@ -584,10 +589,15 @@ class Dataset:
         except for the last chunk in each dimension, which may be smaller.
       split_vars: A boolean indicating whether the chunks in ``ptransform`` are
         split across variables, or if each chunk contains all variables.
+      label: A unique name for this stage of the pipeline. Defaults to ``None``,
+        in which case a name will be generated.
 
     Returns:
       An ``xarray_beam.Dataset`` instance wrapping the PTransform.
     """
+    if label is None:
+      label = _get_label('from_ptransform')
+
     if not isinstance(chunks, Mapping):
       raise TypeError(
           f'chunks must be a mapping for from_ptransform, got {chunks}'
@@ -598,8 +608,9 @@ class Dataset:
             'chunks must be a mapping with integer values for from_ptransform,'
             f' got {chunks}'
         )
+
     chunks = normalize_chunks(chunks, template)
-    ptransform = ptransform | _get_label('validate') >> beam.MapTuple(
+    ptransform = ptransform | label >> beam.MapTuple(
         functools.partial(
             _normalize_and_validate_chunk, template, chunks, split_vars
         )
@@ -615,6 +626,7 @@ class Dataset:
       split_vars: bool = False,
       previous_chunks: Mapping[str, int] | None = None,
       pipeline: beam.Pipeline | None = None,
+      label: str | None = None,
   ) -> Dataset:
     """Create an xarray_beam.Dataset from an xarray.Dataset.
 
@@ -628,13 +640,17 @@ class Dataset:
         with ``normalize_chunks()``.
       pipeline: Beam pipeline to use for this dataset. If not provided, you will
         need apply a pipeline later to compute this dataset.
+      label: A unique name for this stage of the pipeline. Defaults to ``None``,
+        in which case a name will be generated.
     """
+    if label is None:
+      label = _get_label('from_xarray')
     template = zarr.make_template(source)
     if previous_chunks is None:
       previous_chunks = source.sizes
     chunks = normalize_chunks(chunks, template, split_vars, previous_chunks)
     ptransform = core.DatasetToChunks(source, chunks, split_vars)
-    ptransform.label = _get_label('from_xarray')
+    ptransform.label = label
     if pipeline is not None:
       ptransform = _LazyPCollection(pipeline, ptransform)
     return cls(template, dict(chunks), split_vars, ptransform)
@@ -647,6 +663,7 @@ class Dataset:
       chunks: UnnormalizedChunks | None = None,
       split_vars: bool = False,
       pipeline: beam.Pipeline | None = None,
+      label: str | None = None,
   ) -> Dataset:
     """Create an xarray_beam.Dataset from a Zarr store.
 
@@ -659,10 +676,14 @@ class Dataset:
         ptransform, or all stored in the same element.
       pipeline: Beam pipeline to use for this dataset. If not provided, you will
         need apply a pipeline later to compute this dataset.
+      label: A unique name for this stage of the pipeline. Defaults to ``None``,
+        in which case a name will be generated.
 
     Returns:
       New Dataset created from the Zarr store.
     """
+    if label is None:
+      label = _get_label('from_zarr')
     source, previous_chunks = zarr.open_zarr(path)
     if chunks is None:
       chunks = previous_chunks
@@ -672,7 +693,7 @@ class Dataset:
         split_vars=split_vars,
         previous_chunks=previous_chunks,
     )
-    result.ptransform.label = _get_label('from_zarr')
+    result.ptransform.label = label
     if pipeline is not None:
       result._ptransform = _LazyPCollection(pipeline, result.ptransform)
     return result
@@ -737,6 +758,7 @@ class Dataset:
       zarr_shards: UnnormalizedChunks | None = None,
       zarr_format: int | None = None,
       stage_locally: bool | None = None,
+      label: str | None = None,
   ) -> beam.PTransform | beam.PCollection:
     """Write this dataset to a Zarr file.
 
@@ -773,10 +795,15 @@ class Dataset:
         setup on high-latency filesystems. By default, uses local staging if
         possible, which is true as long as `store` is provided as as string or
         path.
+      label: A unique name for this stage of the pipeline. Defaults to ``None``,
+        in which case a name will be generated.
 
     Returns:
       Beam transform that writes the dataset to a Zarr file.
     """
+    if label is None:
+      label = _get_label('to_zarr')
+
     if zarr_shards is not None:
       zarr_shards = normalize_chunks(
           zarr_shards,
@@ -825,7 +852,7 @@ class Dataset:
     if zarr_shards is not None and zarr_format is None:
       zarr_format = 3  # required for shards
 
-    return self.ptransform | _get_label('to_zarr') >> zarr.ChunksToZarr(
+    return self.ptransform | label >> zarr.ChunksToZarr(
         path,
         self.template,
         zarr_chunks=zarr_chunks,
@@ -853,6 +880,7 @@ class Dataset:
       *,
       template: xarray.Dataset | None = None,
       chunks: Mapping[str, int] | None = None,
+      label: str | None = None,
   ) -> Dataset:
     """Map a function over the chunks of this dataset.
 
@@ -866,10 +894,15 @@ class Dataset:
       chunks: explicit new chunks sizes created by applying ``func``. If not
         provided, an attempt will be made to infer the new chunks based on the
         existing chunks, dimensions sizes and the new template.
+      label: A unique name for this stage of the pipeline. Defaults to ``None``,
+        in which case a name will be generated.
 
     Returns:
       New Dataset with updated chunks.
     """
+    if label is None:
+      label = _get_label('map_blocks')
+
     if template is None:
       try:
         template = func(self.template)
@@ -919,7 +952,6 @@ class Dataset:
               f'dataset and {new_chunk_count} in the result of map_blocks'
           )
 
-    label = _get_label('map_blocks')
     func_name = getattr(func, '__name__', None)
     name = f'map-blocks-{func_name}' if func_name else 'map-blocks'
     ptransform = self.ptransform | label >> beam.MapTuple(
@@ -935,6 +967,8 @@ class Dataset:
       split_vars: bool | None = None,
       min_mem: int | None = None,
       max_mem: int = 2**30,
+      *,
+      label: str | None = None,
   ) -> Dataset:
     """Rechunk this Dataset.
 
@@ -949,10 +983,15 @@ class Dataset:
         rechunking. Defaults to ``max_mem/100``.
       max_mem: optional maximum memory usage for an intermediate chunk in
         rechunking. Defaults to 1GB.
+      label: A unique name for this stage of the pipeline. Defaults to ``None``,
+        in which case a name will be generated.
 
     Returns:
       New Dataset with updated chunks.
     """
+    if label is None:
+      label = _get_label('rechunk')
+
     if split_vars is None:
       split_vars = self.split_vars
 
@@ -962,7 +1001,6 @@ class Dataset:
         split_vars=split_vars,
         previous_chunks=self.chunks,
     )
-    label = _get_label('rechunk')
 
     pipeline, ptransform = _split_lazy_pcollection(self._ptransform)
     if isinstance(ptransform, core.DatasetToChunks) and all(
@@ -995,21 +1033,23 @@ class Dataset:
     result = rechunked if split_vars else rechunked.consolidate_variables()
     return result
 
-  def split_variables(self) -> Dataset:
+  def split_variables(self, *, label: str | None = None) -> Dataset:
     """Split variables in this Dataset into separate chunks."""
     if self.split_vars:
       return self
+    if label is None:
+      label = _get_label('split_vars')
     split_vars = True
-    label = _get_label('split_vars')
     ptransform = self.ptransform | label >> rechunk.SplitVariables()
     return type(self)(self.template, self.chunks, split_vars, ptransform)
 
-  def consolidate_variables(self) -> Dataset:
+  def consolidate_variables(self, *, label: str | None = None) -> Dataset:
     """Consolidate variables in this Dataset into a single chunk."""
     if not self.split_vars:
       return self
+    if label is None:
+      label = _get_label('consolidate_vars')
     split_vars = False
-    label = _get_label('consolidate_vars')
     ptransform = self.ptransform | label >> rechunk.ConsolidateVariables()
     return type(self)(self.template, self.chunks, split_vars, ptransform)
 
@@ -1019,6 +1059,7 @@ class Dataset:
       *,
       skipna: bool = True,
       dtype: npt.DTypeLike | None = None,
+      label: str | None = None,
   ) -> Dataset:
     """Compute the mean of this Dataset using Beam combiners.
 
@@ -1029,6 +1070,8 @@ class Dataset:
       dim: dimension(s) to compute the mean over.
       skipna: whether to skip missing data when computing the mean.
       dtype: the desired dtype of the resulting Dataset.
+      label: A unique name for this stage of the pipeline. Defaults to ``None``,
+        in which case a name will be generated.
 
     Returns:
       New Dataset with the mean computed.
@@ -1039,11 +1082,12 @@ class Dataset:
       dims = [dim]
     else:
       dims = dim
+    if label is None:
+      label = _get_label(f"mean_{'_'.join(dims)}")
     template = zarr.make_template(
         self.template.mean(dim=dims, skipna=skipna, dtype=dtype)
     )
     new_chunks = {k: v for k, v in self.chunks.items() if k not in dims}
-    label = _get_label(f"mean_{'_'.join(dims)}")
     ptransform = self.ptransform | label >> combiners.MultiStageMean(
         dims=dims,
         skipna=skipna,
@@ -1056,7 +1100,9 @@ class Dataset:
 
   _head = _whole_dataset_method('head')
 
-  def head(self, **indexers_kwargs: int) -> Dataset:
+  def head(
+      self, *, label: str | None = None, **indexers_kwargs: int
+  ) -> Dataset:
     """Return a Dataset with the first N elements of each dimension."""
     _, ptransform = _split_lazy_pcollection(self._ptransform)
     if not isinstance(ptransform, core.DatasetToChunks):
@@ -1065,11 +1111,13 @@ class Dataset:
           'ptransform=DatasetToChunks. This dataset has '
           f'ptransform={ptransform}'
       )
-    return self._head(**indexers_kwargs)
+    return self._head(label=label, **indexers_kwargs)
 
   _tail = _whole_dataset_method('tail')
 
-  def tail(self, **indexers_kwargs: int) -> Dataset:
+  def tail(
+      self, *, label: str | None = None, **indexers_kwargs: int
+  ) -> Dataset:
     """Return a Dataset with the last N elements of each dimension."""
     _, ptransform = _split_lazy_pcollection(self._ptransform)
     if not isinstance(ptransform, core.DatasetToChunks):
@@ -1078,7 +1126,7 @@ class Dataset:
           'ptransform=DatasetToChunks. This dataset has '
           f'ptransform={ptransform}'
       )
-    return self._tail(**indexers_kwargs)
+    return self._tail(label=label, **indexers_kwargs)
 
   # thin wrappers around xarray methods
   __getitem__ = _whole_dataset_method('__getitem__')
