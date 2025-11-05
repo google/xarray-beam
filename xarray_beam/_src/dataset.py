@@ -537,7 +537,10 @@ class Dataset:
       )
 
   def __repr__(self):
-    base = repr(self.template)
+    template_repr = repr(self.template)
+    # replace dask.array reprs with ..., both for the sake of brevity and
+    # because the dask chunks are not the same as the Dataset chunks.
+    template_repr = re.sub(r'dask.array\<.*\>', '...', template_repr)
     chunks_str = ', '.join(
         [f'{k}: {v}' for k, v in self.chunks.items()]
         + [f'split_vars={self.split_vars}']
@@ -551,7 +554,7 @@ class Dataset:
         f'PTransform: {self._ptransform}\n'
         f'Chunks:     {chunk_size} ({chunks_str})\n'
         f'Template:   {total_size} ({chunk_count} chunk{plural})\n'
-        + textwrap.indent('\n'.join(base.split('\n')[1:]), ' ' * 4)
+        + textwrap.indent('\n'.join(template_repr.split('\n')[1:]), ' ' * 4)
     )
 
   @classmethod

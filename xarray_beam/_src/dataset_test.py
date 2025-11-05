@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import re
+import textwrap
 
 from absl.testing import absltest
 from absl.testing import parameterized
 import apache_beam as beam
 import numpy as np
-import pandas as pd
 import xarray
 import xarray_beam as xbeam
 from xarray_beam._src import dataset as xbeam_dataset
@@ -475,16 +475,19 @@ class DatasetTest(test_util.TestCase):
 
   def test_repr(self):
     ds = xarray.Dataset({'foo': ('x', np.arange(10))})
-    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5})
-    self.assertRegex(
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 5}, label='my_label')
+    self.assertEqual(
         repr(beam_ds),
-        re.escape(
-            '<xarray_beam.Dataset>\n'
-            'PTransform: <DatasetToChunks>\n'
-            'Chunks:     40B (x: 5, split_vars=False)\n'
-            'Template:   80B (2 chunks)\n'
-            '    Dimensions:'
-        ).replace('DatasetToChunks', 'DatasetToChunks.*'),
+        textwrap.dedent("""\
+            <xarray_beam.Dataset>
+            PTransform: <DatasetToChunks(PTransform) label=[my_label]>
+            Chunks:     40B (x: 5, split_vars=False)
+            Template:   80B (2 chunks)
+                Dimensions:  (x: 10)
+                Dimensions without coordinates: x
+                Data variables:
+                    foo      (x) int64 80B ...
+        """).strip(),
     )
 
   def test_from_ptransform(self):
