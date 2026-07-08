@@ -118,7 +118,7 @@ def linkcode_resolve(domain, info):
   except Exception as e:
     print(f'did not find source code for: {info}: {e}')
     return None
-  filename = os.path.relpath(
+  filename = os.path.relpath(  # pyrefly: ignore[no-matching-overload]
       filename, start=os.path.dirname(xarray_beam.__file__)
   )
   lines = f'#L{linenum}-L{linenum + len(source)}' if linenum else ''

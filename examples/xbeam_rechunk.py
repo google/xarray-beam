@@ -88,10 +88,10 @@ def main(argv):
 
   with beam.Pipeline(runner=RUNNER.value, argv=argv) as root:
     root |= (
-        xbeam.Dataset.from_zarr(INPUT_PATH.value, split_vars=True)
+        xbeam.Dataset.from_zarr(INPUT_PATH.value, split_vars=True)  # pyrefly: ignore[bad-argument-type]
         .rechunk(target_chunks if target_shards is None else target_shards)
         .to_zarr(
-            OUTPUT_PATH.value,
+            OUTPUT_PATH.value,  # pyrefly: ignore[bad-argument-type]
             zarr_chunks=target_chunks,
             zarr_shards=target_shards,
             zarr_format=ZARR_FORMAT.value,

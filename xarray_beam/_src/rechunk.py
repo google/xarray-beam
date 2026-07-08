@@ -47,7 +47,7 @@ def normalize_chunks(
     if dim not in chunks or chunks[dim] == -1:
       new_chunk_size = size
     elif isinstance(chunks[dim], tuple):
-      unique_chunks = set(chunks[dim])
+      unique_chunks = set(chunks[dim])  # pyrefly: ignore[bad-argument-type]
       if len(unique_chunks) != 1:
         raise ValueError(
             f'chunks for dimension {dim} are not constant: {unique_chunks}',
@@ -139,7 +139,7 @@ def _consolidate_chunks_in_var_group(
     kwargs.update(combine_kwargs)
 
   try:
-    combined_dataset = xarray.combine_nested(
+    combined_dataset = xarray.combine_nested(  # pyrefly: ignore[no-matching-overload]
         nested_array.tolist(), concat_dim=list(offsets), **kwargs
     )
     return combined_key, combined_dataset
@@ -225,7 +225,7 @@ def consolidate_variables(
     key = core.Key(offsets, new_vars)
 
     try:
-      dataset = xarray.merge(chunks, **kwargs)
+      dataset = xarray.merge(chunks, **kwargs)  # pyrefly: ignore[no-matching-overload]
     except (ValueError, xarray.MergeError) as original_error:
       repr_string = '\n'.join(repr(ds) for ds in chunks[:2])
       if len(chunks) > 2:
@@ -276,7 +276,7 @@ def consolidate_fully(
     kwargs.update(merge_kwargs)
 
   try:
-    dataset = xarray.merge(concatenated_chunks, **kwargs)
+    dataset = xarray.merge(concatenated_chunks, **kwargs)  # pyrefly: ignore[no-matching-overload]
   except (ValueError, xarray.MergeError) as original_error:
     repr_string = '\n'.join(repr(ds) for ds in concatenated_chunks[:2])
     if len(concatenated_chunks) > 2:

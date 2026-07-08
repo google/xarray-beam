@@ -124,18 +124,18 @@ def make_template(
     Non-lazy variables are loaded in memory as NumPy arrays.
   """
   if lazy_vars is None:
-    lazy_vars = set(dataset.keys())
+    lazy_vars = set(dataset.keys())  # pyrefly: ignore[bad-assignment]
     lazy_vars.update(k for k in dataset.coords if k not in dataset.indexes)
 
   result = dataset.copy()
 
   # load non-lazy variables into memory
-  result.update(dataset.drop_vars(lazy_vars).compute())
+  result.update(dataset.drop_vars(lazy_vars).compute())  # pyrefly: ignore[bad-argument-type]
 
   # override the lazy variables
   delayed = dask.delayed(_raise_template_error)()
   for k, v in dataset.variables.items():
-    if k in lazy_vars:
+    if k in lazy_vars:  # pyrefly: ignore[not-iterable]
       # names of dask arrays are used for keeping track of results, so arrays
       # with the same name cannot have different shape or dtype
       name = f"make_template_{'x'.join(map(str, v.shape))}_{v.dtype}"
@@ -342,7 +342,7 @@ def _finalize_setup_zarr_args(
   template = _make_template_from_chunked(template)
   chunks = _finalize_chunks(template, chunks)
   if shards is not None:
-    shards = _finalize_chunks(template, chunks | shards)
+    shards = _finalize_chunks(template, chunks | shards)  # pyrefly: ignore[unsupported-operation]
     if not all(shards[k] % chunks[k] == 0 for k in chunks):
       # raise a better error message than the user would see from zarr-python
       raise ValueError(
@@ -362,11 +362,11 @@ def _get_chunk_and_shard_encoding(
   for var_name in _chunked_vars(template):
     assert isinstance(var_name, str)
     variable = template.variables[var_name]
-    chunks = tuple(zarr_chunks[dim] for dim in variable.dims)
+    chunks = tuple(zarr_chunks[dim] for dim in variable.dims)  # pyrefly: ignore[bad-index]
     encoding[var_name] = {'chunks': chunks}
     if zarr_shards is not None:
       encoding[var_name]['shards'] = tuple(
-          zarr_shards[dim] for dim in variable.dims
+          zarr_shards[dim] for dim in variable.dims  # pyrefly: ignore[bad-index]
       )
   return encoding
 
@@ -411,10 +411,10 @@ def _setup_zarr(
       del var.encoding['chunks']
 
   chunk_encoding = _get_chunk_and_shard_encoding(
-      template, zarr_chunks, zarr_shards
+      template, zarr_chunks, zarr_shards  # pyrefly: ignore[bad-argument-type]
   )
-  encoding = {
-      k: encoding.get(k, {}) | chunk_encoding.get(k, {})
+  encoding = {  # pyrefly: ignore[bad-assignment]
+      k: encoding.get(k, {}) | chunk_encoding.get(k, {})  # pyrefly: ignore[no-matching-overload]
       for k in template.variables
   }
   encoding_str = pprint.pformat(encoding, sort_dicts=False)
@@ -543,7 +543,7 @@ def validate_zarr_chunk(
         f'{unexpected_indexes}'
     )
 
-  region = core.offsets_to_slices(key.offsets, chunk.sizes)
+  region = core.offsets_to_slices(key.offsets, chunk.sizes)  # pyrefly: ignore[bad-argument-type]
   for dim, full_index in template.indexes.items():
     if dim in chunk.indexes:
       expected_index = full_index[region[dim]]
@@ -610,7 +610,7 @@ def write_chunk_to_zarr(
       k for k in chunk.variables if k in _unchunked_vars(template)
   ]
   writable_chunk = chunk.drop_vars(already_written)
-  region = core.offsets_to_slices(key.offsets, writable_chunk.sizes)
+  region = core.offsets_to_slices(key.offsets, writable_chunk.sizes)  # pyrefly: ignore[bad-argument-type]
 
   # Ensure the arrays in writable_chunk are each stored in a single dask chunk.
   writable_chunk = writable_chunk.compute().chunk()

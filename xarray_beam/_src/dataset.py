@@ -72,7 +72,7 @@ def _to_human_size(nbytes: int) -> str:
   for unit in ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB']:
     if nbytes < 1000:
       return f'{_at_least_two_digits(nbytes)}{unit}'
-    nbytes /= 1000
+    nbytes /= 1000  # pyrefly: ignore[bad-assignment]
   nbytes *= 1000
   return f'{_at_least_two_digits(nbytes)}EB'
 
@@ -141,7 +141,7 @@ def normalize_chunks(
           "chunks='auto'. Supply an explicit number of bytes instead, e.g., "
           "chunks='100MB'."
       )
-    chunks = {k: chunks for k in template.dims}
+    chunks = {k: chunks for k in template.dims}  # pyrefly: ignore[bad-assignment]
   elif isinstance(chunks, Mapping):
     string_chunks = {v for v in chunks.values() if isinstance(v, str)}
     if len(string_chunks) > 1:
@@ -157,9 +157,9 @@ def normalize_chunks(
   else:
     raise TypeError(f'chunks must be a string or a mapping, got {chunks=}')
 
-  if ... in chunks:
-    default_chunks = chunks[...]
-    chunks = {k: chunks.get(k, default_chunks) for k in template.dims}
+  if ... in chunks:  # pyrefly: ignore[not-iterable, unsupported-operation]
+    default_chunks = chunks[...]  # pyrefly: ignore[bad-index]
+    chunks = {k: chunks.get(k, default_chunks) for k in template.dims}  # pyrefly: ignore[bad-assignment]
 
   defaults = previous_chunks if previous_chunks else template.sizes
   chunks: dict[str, int | str] = {**defaults, **chunks}  # pytype: disable=annotation-type-mismatch
@@ -253,6 +253,7 @@ def _normalize_and_validate_chunk(
         key = key.replace(vars=set(dataset.keys()))
       elif key.vars != set(dataset.keys()):
         raise ValueError(
+            # pyrefly: ignore[bad-specialization]
             f'dataset keys {sorted(dataset.keys())} do not match'
             f' key.vars={sorted(key.vars)}'
         )
@@ -262,7 +263,7 @@ def _normalize_and_validate_chunk(
     new_offsets = dict(key.offsets)
     for dim in dataset.dims:
       if dim not in new_offsets:
-        new_offsets[dim] = 0
+        new_offsets[dim] = 0  # pyrefly: ignore[unsupported-operation]
     if len(new_offsets) != len(key.offsets):
       key = key.replace(offsets=new_offsets)
 
@@ -353,7 +354,7 @@ def _apply_to_each_chunk(
         key.offsets.get(dim, 0) // old_chunks.get(dim, 1) * new_chunks[dim]
     )
   new_vars = set(new_chunk) if key.vars is not None else None
-  new_key = core.Key(new_offsets, new_vars)
+  new_key = core.Key(new_offsets, new_vars)  # pyrefly: ignore[bad-argument-type]
   return new_key, new_chunk
 
 
@@ -516,7 +517,7 @@ class Dataset:
   def bytes_per_chunk(self) -> int:
     """Estimate of the number of bytes per dataset chunk."""
     variable_sizes = [
-        v.dtype.itemsize * math.prod(self.chunks[d] for d in v.dims)
+        v.dtype.itemsize * math.prod(self.chunks[d] for d in v.dims)  # pyrefly: ignore[bad-index]
         for v in self.template.values()
     ]
     return max(variable_sizes) if self.split_vars else sum(variable_sizes)
@@ -528,7 +529,7 @@ class Dataset:
       total = 0
       for variable in self.template.values():
         total += math.prod(
-            math.ceil(self.sizes[d] / self.chunks[d]) for d in variable.dims
+            math.ceil(self.sizes[d] / self.chunks[d]) for d in variable.dims  # pyrefly: ignore[bad-index]
         )
       return total
     else:
@@ -612,13 +613,13 @@ class Dataset:
             f' got {chunks}'
         )
 
-    chunks = normalize_chunks(chunks, template)
+    chunks = normalize_chunks(chunks, template)  # pyrefly: ignore[bad-assignment]
     ptransform = ptransform | label >> beam.MapTuple(
         functools.partial(
             _normalize_and_validate_chunk, template, chunks, split_vars
         )
     )
-    return cls(template, chunks, split_vars, ptransform)
+    return cls(template, chunks, split_vars, ptransform)  # pyrefly: ignore[bad-argument-type]
 
   @classmethod
   def from_xarray(
@@ -650,13 +651,13 @@ class Dataset:
       label = _get_label('from_xarray')
     template = zarr.make_template(source)
     if previous_chunks is None:
-      previous_chunks = source.sizes
-    chunks = normalize_chunks(chunks, template, split_vars, previous_chunks)
-    ptransform = core.DatasetToChunks(source, chunks, split_vars)
+      previous_chunks = source.sizes  # pyrefly: ignore[bad-assignment]
+    chunks = normalize_chunks(chunks, template, split_vars, previous_chunks)  # pyrefly: ignore[bad-assignment]
+    ptransform = core.DatasetToChunks(source, chunks, split_vars)  # pyrefly: ignore[bad-argument-type]
     ptransform.label = label
     if pipeline is not None:
       ptransform = _LazyPCollection(pipeline, ptransform)
-    return cls(template, dict(chunks), split_vars, ptransform)
+    return cls(template, dict(chunks), split_vars, ptransform)  # pyrefly: ignore[no-matching-overload]
 
   @classmethod
   def from_zarr(
@@ -689,10 +690,10 @@ class Dataset:
       label = _get_label('from_zarr')
     source, previous_chunks = zarr.open_zarr(path)
     if chunks is None:
-      chunks = previous_chunks
+      chunks = previous_chunks  # pyrefly: ignore[bad-assignment]
     result = cls.from_xarray(
         source,
-        chunks,
+        chunks,  # pyrefly: ignore[bad-argument-type]
         split_vars=split_vars,
         previous_chunks=previous_chunks,
     )
@@ -709,7 +710,7 @@ class Dataset:
     """Convert chunks per shard to chunks."""
     chunks_per_shard = dict(zarr_chunks_per_shard)
     if ... in chunks_per_shard:
-      default_cps = chunks_per_shard.pop(...)
+      default_cps = chunks_per_shard.pop(...)  # pyrefly: ignore[bad-argument-type]
     else:
       default_cps = 1
 
@@ -808,7 +809,7 @@ class Dataset:
       label = _get_label('to_zarr')
 
     if zarr_shards is not None:
-      zarr_shards = normalize_chunks(
+      zarr_shards = normalize_chunks(  # pyrefly: ignore[bad-assignment]
           zarr_shards,
           self.template,
           split_vars=self.split_vars,
@@ -821,9 +822,9 @@ class Dataset:
             'cannot supply both zarr_chunks_per_shard and zarr_chunks'
         )
       if zarr_shards is None:
-        zarr_shards = self.chunks
-      zarr_chunks = self._zarr_chunks_per_shard_to_chunks(
-          zarr_chunks_per_shard, zarr_shards
+        zarr_shards = self.chunks  # pyrefly: ignore[bad-assignment]
+      zarr_chunks = self._zarr_chunks_per_shard_to_chunks(  # pyrefly: ignore[bad-assignment]
+          zarr_chunks_per_shard, zarr_shards  # pyrefly: ignore[bad-argument-type]
       )
 
     if zarr_chunks is None:
@@ -831,7 +832,7 @@ class Dataset:
         raise ValueError('cannot supply zarr_shards without zarr_chunks')
       zarr_chunks = {}
 
-    zarr_chunks = normalize_chunks(
+    zarr_chunks = normalize_chunks(  # pyrefly: ignore[bad-assignment]
         zarr_chunks,
         self.template,
         split_vars=self.split_vars,
@@ -842,15 +843,15 @@ class Dataset:
       # chunk sizes, which means shard sizes must be rounded up to be larger
       # than the full dimension size. This will likely be relaxed in the future:
       # https://github.com/zarr-developers/zarr-extensions/issues/34
-      zarr_shards = dict(zarr_shards)
+      zarr_shards = dict(zarr_shards)  # pyrefly: ignore[no-matching-overload]
       for k in zarr_shards:
         if zarr_shards[k] == self.sizes[k]:
           zarr_shards[k] = (
-              math.ceil(zarr_shards[k] / zarr_chunks[k]) * zarr_chunks[k]
+              math.ceil(zarr_shards[k] / zarr_chunks[k]) * zarr_chunks[k]  # pyrefly: ignore[bad-index, unsupported-operation]
           )
       self._check_shards_or_chunks(zarr_shards, 'shards')
     else:
-      self._check_shards_or_chunks(zarr_chunks, 'chunks')
+      self._check_shards_or_chunks(zarr_chunks, 'chunks')  # pyrefly: ignore[bad-argument-type]
 
     if zarr_shards is not None and zarr_format is None:
       zarr_format = 3  # required for shards
@@ -858,7 +859,7 @@ class Dataset:
     return self.ptransform | label >> zarr.ChunksToZarr(
         path,
         self.template,
-        zarr_chunks=zarr_chunks,
+        zarr_chunks=zarr_chunks,  # pyrefly: ignore[bad-argument-type]
         zarr_shards=zarr_shards,
         zarr_format=zarr_format,
         stage_locally=stage_locally,
@@ -936,7 +937,7 @@ class Dataset:
       chunks = _infer_new_chunks(
           old_sizes=self.sizes,
           old_chunks=self.chunks,
-          new_sizes=template.sizes,
+          new_sizes=template.sizes,  # pyrefly: ignore[bad-argument-type]
       )  # pytype: disable=wrong-arg-types
 
     for dim, old_chunks in self.chunks.items():
@@ -998,7 +999,7 @@ class Dataset:
     if split_vars is None:
       split_vars = self.split_vars
 
-    chunks = normalize_chunks(
+    chunks = normalize_chunks(  # pyrefly: ignore[bad-assignment]
         chunks,
         self.template,
         split_vars=split_vars,
@@ -1007,15 +1008,15 @@ class Dataset:
 
     pipeline, ptransform = _split_lazy_pcollection(self._ptransform)
     if isinstance(ptransform, core.DatasetToChunks) and all(
-        chunks[k] % self.chunks[k] == 0 for k in chunks
+        chunks[k] % self.chunks[k] == 0 for k in chunks  # pyrefly: ignore[bad-index, not-iterable]
     ):
       # Rechunking can be performed by re-reading the source dataset with new
       # chunks, rather than using a separate rechunking transform.
-      ptransform = core.DatasetToChunks(ptransform.dataset, chunks, split_vars)
+      ptransform = core.DatasetToChunks(ptransform.dataset, chunks, split_vars)  # pyrefly: ignore[bad-argument-type]
       ptransform.label = _concat_labels(ptransform.label, label)
       if pipeline is not None:
         ptransform = _LazyPCollection(pipeline, ptransform)
-      return type(self)(self.template, chunks, split_vars, ptransform)
+      return type(self)(self.template, chunks, split_vars, ptransform)  # pyrefly: ignore[bad-argument-type]
 
     # Need to do a full rechunking.
     # If also splitting variables, do that first because smaller itemsize allows
@@ -1024,14 +1025,14 @@ class Dataset:
     rechunk_transform = rechunk.Rechunk(
         prechunked.sizes,
         prechunked.chunks,
-        chunks,
+        chunks,  # pyrefly: ignore[bad-argument-type]
         itemsize=prechunked.itemsize,
         min_mem=min_mem,
         max_mem=max_mem,
     )
     ptransform = prechunked.ptransform | label >> rechunk_transform
     rechunked = type(self)(
-        self.template, chunks, prechunked.split_vars, ptransform
+        self.template, chunks, prechunked.split_vars, ptransform  # pyrefly: ignore[bad-argument-type]
     )
     result = rechunked if split_vars else rechunked.consolidate_variables()
     return result
@@ -1086,13 +1087,13 @@ class Dataset:
     else:
       dims = dim
     if label is None:
-      label = _get_label(f"mean_{'_'.join(dims)}")
+      label = _get_label(f"mean_{'_'.join(dims)}")  # pyrefly: ignore[no-matching-overload]
     template = zarr.make_template(
         self.template.mean(dim=dims, skipna=skipna, dtype=dtype)
     )
     new_chunks = {k: v for k, v in self.chunks.items() if k not in dims}
     ptransform = self.ptransform | label >> combiners.MultiStageMean(
-        dims=dims,
+        dims=dims,  # pyrefly: ignore[bad-argument-type]
         skipna=skipna,
         dtype=dtype,
         chunks=self.chunks,

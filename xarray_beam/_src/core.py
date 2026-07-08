@@ -158,7 +158,7 @@ class Key:
       vars = self.vars
     if indices is _DEFAULT:
       indices = self.indices
-    return type(self)(offsets, vars, indices)
+    return type(self)(offsets, vars, indices)  # pyrefly: ignore[bad-argument-type]
 
   def with_offsets(self, **offsets: int | None) -> Key:
     """Replace some offsets with new values.
@@ -401,7 +401,7 @@ def normalize_expanded_chunks(
     if dim not in chunks or chunks[dim] == -1:
       result[dim] = (dim_size,)
     elif isinstance(chunks[dim], tuple):
-      total = sum(chunks[dim])
+      total = sum(chunks[dim])  # pyrefly: ignore[no-matching-overload]
       if total != dim_size:
         raise ValueError(
             f"sum of provided chunks does not match size of dimension {dim}: "
@@ -409,7 +409,7 @@ def normalize_expanded_chunks(
         )
       result[dim] = chunks[dim]
     else:
-      multiple, remainder = divmod(dim_size, chunks[dim])
+      multiple, remainder = divmod(dim_size, chunks[dim])  # pyrefly: ignore[no-matching-overload]
       result[dim] = multiple * (chunks[dim],) + (
           (remainder,) if remainder else ()
       )
@@ -439,9 +439,9 @@ class _DatasetToChunksBase(beam.PTransform, Generic[DatasetOrDatasets]):
       dask_chunks = self._first.chunks
       if not dask_chunks:
         raise ValueError("dataset must be chunked or chunks must be provided")
-      chunks = dask_to_xbeam_chunks(dask_chunks)
+      chunks = dask_to_xbeam_chunks(dask_chunks)  # pyrefly: ignore[bad-assignment]
 
-    for k in chunks:
+    for k in chunks:  # pyrefly: ignore[not-iterable]
       if k not in self._first.dims:
         raise ValueError(
             f"chunks key {k!r} is not a dimension on the provided dataset(s)"
@@ -538,7 +538,7 @@ class _DatasetToChunksBase(beam.PTransform, Generic[DatasetOrDatasets]):
     if isinstance(self.dataset, xarray.Dataset):
       return key, results[0]
     else:
-      return key, results
+      return key, results  # pyrefly: ignore[bad-return]
 
 
 @export
@@ -588,7 +588,7 @@ class DatasetToChunks(_DatasetToChunksBase):
     # We use the simple heuristic of only sharding inputs along the dimension
     # with the most chunks.
     lengths = {
-        k: math.ceil(size / self.chunks.get(k, size))
+        k: math.ceil(size / self.chunks.get(k, size))  # pyrefly: ignore[missing-attribute]
         for k, size in self._first.sizes.items()
     }
     return max(lengths, key=lengths.get) if lengths else None  # pytype: disable=bad-return-type
@@ -624,29 +624,29 @@ class DatasetToChunks(_DatasetToChunksBase):
     if var_name is None:
       offsets = self.offsets
     else:
-      offsets = {dim: self.offsets[dim] for dim in self._first[var_name].dims}
+      offsets = {dim: self.offsets[dim] for dim in self._first[var_name].dims}  # pyrefly: ignore[bad-index]
 
     if shard_id is None:
       assert self.split_vars
-      yield from iter_chunk_keys(offsets, vars={var_name})
+      yield from iter_chunk_keys(offsets, vars={var_name})  # pyrefly: ignore[bad-argument-type]
     else:
       assert self.split_vars == (var_name is not None)
       dim = self.sharded_dim
-      count = math.ceil(len(self.offsets[dim]) / self.shard_count)
+      count = math.ceil(len(self.offsets[dim]) / self.shard_count)  # pyrefly: ignore[bad-index, unsupported-operation]
       dim_slice = slice(shard_id * count, (shard_id + 1) * count)
-      offsets = {**offsets, dim: offsets[dim][dim_slice]}
+      offsets = {**offsets, dim: offsets[dim][dim_slice]}  # pyrefly: ignore[bad-index, invalid-argument]
       vars_ = {var_name} if self.split_vars else None
-      yield from iter_chunk_keys(offsets, vars=vars_)
+      yield from iter_chunk_keys(offsets, vars=vars_)  # pyrefly: ignore[bad-argument-type]
 
   def _shard_inputs(self) -> list[tuple[int | None, str | None]]:
     """Create inputs for sharded key iterators."""
     if not self.split_vars:
-      return [(i, None) for i in range(self.shard_count)]
+      return [(i, None) for i in range(self.shard_count)]  # pyrefly: ignore[bad-argument-type]
 
     inputs = []
     for name, variable in self._first.items():
       if self.sharded_dim in variable.dims:
-        inputs.extend([(i, name) for i in range(self.shard_count)])
+        inputs.extend([(i, name) for i in range(self.shard_count)])  # pyrefly: ignore[bad-argument-type]
       else:
         inputs.append((None, name))
     return inputs  # pytype: disable=bad-return-type  # always-use-property-annotation
