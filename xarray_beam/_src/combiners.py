@@ -288,7 +288,7 @@ def _optimal_fanout_bins(
   )
   # The dict of candidates is empty if chunks_count=1, in which can there's no
   # need to use a combiner.
-  return min(candidates, key=candidates.get) if candidates else ()
+  return min(candidates, key=candidates.get) if candidates else ()  # pyrefly: ignore[no-matching-overload]
 
 
 @dataclasses.dataclass
