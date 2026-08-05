@@ -159,7 +159,7 @@ def normalize_chunks(
 
   if ... in chunks:  # pyrefly: ignore[not-iterable, unsupported-operation]
     default_chunks = chunks[...]  # pyrefly: ignore[bad-index]
-    chunks = {k: chunks.get(k, default_chunks) for k in template.dims}  # pyrefly: ignore[bad-assignment, missing-attribute]
+    chunks = {k: chunks.get(k, default_chunks) for k in template.dims}  # pyrefly: ignore[bad-assignment]
 
   defaults = previous_chunks if previous_chunks else template.sizes
   chunks: dict[str, int | str] = {**defaults, **chunks}  # pytype: disable=annotation-type-mismatch
