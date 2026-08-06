@@ -125,7 +125,7 @@ def make_template(
   """
   if lazy_vars is None:
     lazy_vars = set(dataset.keys())  # pyrefly: ignore[bad-assignment]
-    lazy_vars.update(k for k in dataset.coords if k not in dataset.indexes)
+    lazy_vars.update(k for k in dataset.coords if k not in dataset.indexes)  # pyrefly: ignore[missing-attribute]
 
   result = dataset.copy()
 
