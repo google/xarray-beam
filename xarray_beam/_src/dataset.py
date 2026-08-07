@@ -665,6 +665,7 @@ class Dataset:
       path: str,
       *,
       chunks: UnnormalizedChunks | None = None,
+      read_shards: bool = False,
       split_vars: bool = False,
       pipeline: beam.Pipeline | None = None,
       label: str | None = None,
@@ -676,6 +677,9 @@ class Dataset:
       chunks: optional mapping from dimension names to chunk sizes, or any value
         that can be passed to :py:func:`xarray_beam.normalize_chunks`. If not
         provided, the chunk sizes will be inferred from the Zarr file.
+      read_shards: If True, read shard sizes instead of chunk sizes for sharded
+        Zarr v3 datasets. If False (default), or if the store is not sharded,
+        use chunk sizes.
       split_vars: whether variables are split between separate elements in the
         ptransform, or all stored in the same element.
       pipeline: Beam pipeline to use for this dataset. If not provided, you will
@@ -688,7 +692,7 @@ class Dataset:
     """
     if label is None:
       label = _get_label('from_zarr')
-    source, previous_chunks = zarr.open_zarr(path)
+    source, previous_chunks = zarr.open_zarr(path, read_shards=read_shards)
     if chunks is None:
       chunks = previous_chunks  # pyrefly: ignore[bad-assignment]
     result = cls.from_xarray(

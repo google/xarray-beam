@@ -633,6 +633,26 @@ class DatasetTest(test_util.TestCase):
     collected = beam_ds.collect_with_direct_runner()
     xarray.testing.assert_identical(ds, collected)
 
+  def test_from_zarr_with_shards(self):
+    temp_dir = self.create_tempdir().full_path
+    ds = xarray.Dataset({'foo': ('x', np.arange(12))})
+    beam_ds = xbeam.Dataset.from_xarray(ds, {'x': 6})
+    with beam.Pipeline() as p:
+      p |= beam_ds.to_zarr(
+          temp_dir,
+          zarr_chunks={'x': 2},
+          zarr_shards={'x': 6},
+      )
+    read_ds = xbeam.Dataset.from_zarr(temp_dir)
+    self.assertEqual(read_ds.chunks, {'x': 2})
+    collected = read_ds.collect_with_direct_runner()
+    xarray.testing.assert_identical(ds, collected)
+
+    read_ds_shards = xbeam.Dataset.from_zarr(temp_dir, read_shards=True)
+    self.assertEqual(read_ds_shards.chunks, {'x': 6})
+    collected_shards = read_ds_shards.collect_with_direct_runner()
+    xarray.testing.assert_identical(ds, collected_shards)
+
   def test_to_zarr(self):
     temp_dir = self.create_tempdir().full_path
     ds = xarray.Dataset({'foo': ('x', np.arange(12))})
