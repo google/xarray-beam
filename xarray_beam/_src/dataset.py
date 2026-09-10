@@ -616,7 +616,7 @@ class Dataset:
     chunks = normalize_chunks(chunks, template)  # pyrefly: ignore[bad-assignment]
     ptransform = ptransform | label >> beam.MapTuple(
         functools.partial(
-            _normalize_and_validate_chunk, template, chunks, split_vars
+            _normalize_and_validate_chunk, template, chunks, split_vars  # pyrefly: ignore[bad-argument-type]
         )
     )
     return cls(template, chunks, split_vars, ptransform)  # pyrefly: ignore[bad-argument-type]
