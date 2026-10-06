@@ -162,7 +162,7 @@ def normalize_chunks(
     chunks = {k: chunks.get(k, default_chunks) for k in template.dims}  # pyrefly: ignore[bad-assignment, missing-attribute]
 
   defaults = previous_chunks if previous_chunks else template.sizes
-  chunks: dict[str, int | str] = {**defaults, **chunks}  # pytype: disable=annotation-type-mismatch
+  chunks: dict[str, int | str] = {**defaults, **chunks}  # pyrefly: ignore[invalid-argument]
 
   dtypes = {
       k: v.dtype for k, v in template.variables.items() if v.chunks is not None
@@ -502,7 +502,7 @@ class Dataset:
   @property
   def sizes(self) -> Mapping[str, int]:
     """Size of each dimension on this dataset."""
-    return dict(self.template.sizes)  # pytype: disable=bad-return-type
+    return dict(self.template.sizes)  # pyrefly: ignore[bad-return]
 
   @property
   def itemsize(self) -> int:
@@ -938,7 +938,7 @@ class Dataset:
           old_sizes=self.sizes,
           old_chunks=self.chunks,
           new_sizes=template.sizes,  # pyrefly: ignore[bad-argument-type]
-      )  # pytype: disable=wrong-arg-types
+      )
 
     for dim, old_chunks in self.chunks.items():
       if old_chunks < self.sizes[dim]:

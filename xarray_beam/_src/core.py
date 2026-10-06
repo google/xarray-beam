@@ -457,11 +457,11 @@ class _DatasetToChunksBase(beam.PTransform, Generic[DatasetOrDatasets]):
   def _datasets(self) -> list[xarray.Dataset]:
     if isinstance(self.dataset, xarray.Dataset):
       return [self.dataset]
-    return list(self.dataset)  # pytype: disable=bad-return-type
+    return list(self.dataset)
 
   @functools.cached_property
   def expanded_chunks(self) -> dict[str, tuple[int, ...]]:
-    return normalize_expanded_chunks(self.chunks, self._first.sizes)  # pytype: disable=wrong-arg-types  # always-use-property-annotation
+    return normalize_expanded_chunks(self.chunks, self._first.sizes)  # pyrefly: ignore[bad-argument-type]
 
   @functools.cached_property
   def offsets(self) -> dict[str, list[int]]:
@@ -591,7 +591,7 @@ class DatasetToChunks(_DatasetToChunksBase):
         k: math.ceil(size / self.chunks.get(k, size))  # pyrefly: ignore[missing-attribute]
         for k, size in self._first.sizes.items()
     }
-    return max(lengths, key=lengths.get) if lengths else None  # pytype: disable=bad-return-type
+    return max(lengths, key=lengths.get) if lengths else None  # pyrefly: ignore[no-matching-overload]
 
   @functools.cached_property
   def shard_count(self) -> int | None:
@@ -615,7 +615,7 @@ class DatasetToChunks(_DatasetToChunksBase):
         relevant_offsets = {
             k: v for k, v in self.offsets.items() if k in variable.dims
         }
-        yield from iter_chunk_keys(relevant_offsets, vars={name})  # pytype: disable=wrong-arg-types  # always-use-property-annotation
+        yield from iter_chunk_keys(relevant_offsets, vars={name})  # pyrefly: ignore[bad-argument-type]
 
   def _iter_shard_keys(
       self, shard_id: int | None, var_name: str | None
@@ -649,7 +649,7 @@ class DatasetToChunks(_DatasetToChunksBase):
         inputs.extend([(i, name) for i in range(self.shard_count)])  # pyrefly: ignore[bad-argument-type]
       else:
         inputs.append((None, name))
-    return inputs  # pytype: disable=bad-return-type  # always-use-property-annotation
+    return inputs
 
   def expand(self, pcoll):
     if self.shard_count is None:
@@ -724,7 +724,7 @@ class ReadDataset(_DatasetToChunksBase):
         dims = tuple(d for d in variable.dims if d in self.expanded_chunks)
         shape = tuple(len(self.expanded_chunks[dim]) for dim in dims)
         out.append((name, dims, shape))
-    return out  # pytype: disable=bad-return-type
+    return out
 
   @functools.cached_property
   def _cumulative_sizes(self) -> np.ndarray:
@@ -743,7 +743,7 @@ class ReadDataset(_DatasetToChunksBase):
     return Key(offsets, vars=None if name is None else {name})
 
   def _get_element(self, position: int) -> tuple[Key, xarray.Dataset]:
-    return self._key_to_chunks(self._index_to_key(position))  # pytype: disable=bad-return-type
+    return self._key_to_chunks(self._index_to_key(position))
 
   def expand(
       self, pbegin: beam.PBegin

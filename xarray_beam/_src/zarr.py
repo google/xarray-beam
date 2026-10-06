@@ -227,11 +227,11 @@ def replace_template_dims(
 
 
 def _unchunked_vars(ds: xarray.Dataset) -> set[str]:
-  return {k for k, v in ds.variables.items() if v.chunks is None}  # pytype: disable=bad-return-type
+  return {k for k, v in ds.variables.items() if v.chunks is None}  # pyrefly: ignore[bad-return]
 
 
 def _chunked_vars(ds: xarray.Dataset) -> set[str]:
-  return set(ds.variables.keys()) - _unchunked_vars(ds)  # pytype: disable=bad-return-type
+  return set(ds.variables.keys()) - _unchunked_vars(ds)  # pyrefly: ignore[bad-return]
 
 
 def _make_template_from_chunked(dataset: xarray.Dataset) -> xarray.Dataset:
@@ -298,8 +298,8 @@ def _dask_to_zarr_chunksize(dim: str, sizes: tuple[int, ...]) -> int:
 
 
 def _zarr_from_dask_chunks(dataset: xarray.Dataset) -> dict[str, int]:
-  return {  # pytype: disable=bad-return-type
-      dim: _dask_to_zarr_chunksize(dim, sizes)  # pytype: disable=wrong-arg-types
+  return {  # pyrefly: ignore[bad-return]
+      dim: _dask_to_zarr_chunksize(dim, sizes)  # pyrefly: ignore[bad-argument-type]
       for dim, sizes in dataset.chunks.items()
   }
 
