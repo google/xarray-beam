@@ -309,6 +309,21 @@ class CodersTest(test_util.TestCase):
       with beam.Pipeline(runner='DirectRunner') as p:
         p | beam.Create(inputs) | beam.GroupByKey()
 
+  def test_dataset_coder_estimate_size_small(self):
+    dataset = xarray.Dataset({'foo': ('x', np.arange(6))})
+    self.assertEqual(core.DatasetCoder().estimate_size(dataset), dataset.nbytes)
+
+  def test_dataset_coder_estimate_size_overflow(self):
+    # dask-backed array gives us a >2 GB nbytes without allocating memory:
+    # 2**29 * 8 bytes = 2**32 bytes (~4 GB), above Beam's 2**31 - 1 cap.
+    dataset = xarray.Dataset(
+        {'foo': (('x',), da.zeros(2**29, dtype='float64'))}
+    )
+    self.assertGreater(dataset.nbytes, 2**31 - 1)
+    with self.assertWarnsRegex(UserWarning, "exceeds Beam's 2 GB"):
+      size = core.DatasetCoder().estimate_size(dataset)
+    self.assertEqual(size, 2**31 - 1)
+
 
 class DatasetToChunksTest(test_util.TestCase):
 

@@ -20,6 +20,7 @@ import functools
 import itertools
 import math
 import pickle
+import warnings
 import time
 from typing import Any, Generic, TypeVar
 
@@ -272,7 +273,15 @@ class DatasetCoder(_PickleCoder):
     return False
 
   def estimate_size(self, value: xarray.Dataset) -> int:
-    return value.nbytes
+    nbytes = value.nbytes
+    if nbytes > 2**31 - 1:
+      warnings.warn(
+          f"Dataset size ({nbytes / 2**30:.1f} GB) exceeds Beam's 2 GB "
+          f"counter limit; capping estimate_size to 2^31-1.",
+          stacklevel=2,
+      )
+      return 2**31 - 1
+    return nbytes
 
   def to_type_hint(self) -> type[xarray.Dataset]:
     return xarray.Dataset
