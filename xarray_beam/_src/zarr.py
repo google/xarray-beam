@@ -45,7 +45,7 @@ ReadableStore = str | zarr_storage.StoreLike | os.PathLike[str]
 WritableStore = str | zarr_storage.StoreLike | os.PathLike[str]
 
 
-def _infer_chunks(dataset: xarray.Dataset) -> dict[str, int]:
+def _infer_chunks(dataset: xarray.Dataset, read_shards: bool) -> dict[str, int]:
   """Infer chunks for an xarray.Dataset loaded from Zarr."""
   # The original Zarr array chunks (as tuples) are stored in the "encoding"
   # dictionary on each DataArray object.
@@ -54,15 +54,18 @@ def _infer_chunks(dataset: xarray.Dataset) -> dict[str, int]:
   for name, variable in dataset.items():
     # exclude variables that are indexed, which are loaded into memory already
     if name not in dataset.indexes:
-      for dim, size in zip(variable.dims, variable.encoding['chunks']):
+      shards = variable.encoding.get('shards') if read_shards else None
+      var_chunks = shards or variable.encoding['chunks']
+      for dim, size in zip(variable.dims, var_chunks):
         chunks_sets[dim].add(size)
 
   chunks = {}
   for dim, sizes in chunks_sets.items():
     if len(sizes) > 1:
+      hint = ' (shard sizes used where present)' if read_shards else ''
       raise ValueError(
           f'inconsistent chunk sizes on Zarr dataset for dimension {dim!r}: '
-          f'{sizes}'
+          f'{sizes}{hint}'
       )
     (chunks[dim],) = sizes
   return chunks
@@ -70,7 +73,10 @@ def _infer_chunks(dataset: xarray.Dataset) -> dict[str, int]:
 
 @core.export
 def open_zarr(
-    store: ReadableStore, **kwargs: Any
+    store: ReadableStore,
+    *,
+    read_shards: bool = False,
+    **kwargs: Any,
 ) -> tuple[xarray.Dataset, dict[str, int]]:
   """Returns a lazily indexable xarray.Dataset and chunks from a Zarr store.
 
@@ -80,6 +86,9 @@ def open_zarr(
 
   Args:
     store: Xarray compatible Zarr store to open.
+    read_shards: If True, read shard sizes instead of chunk sizes for sharded
+      Zarr v3 datasets. If False (default), or if the store is not sharded,
+      use chunk sizes.
     **kwargs: passed on to xarray.open_zarr. The "chunks" keyword argument is
       not supported.
 
@@ -92,7 +101,7 @@ def open_zarr(
         'xarray_beam.open_zarr does not support the `chunks` argument'
     )
   dataset = xarray.open_zarr(store, **kwargs, chunks=None)
-  chunks = _infer_chunks(dataset)
+  chunks = _infer_chunks(dataset, read_shards=read_shards)
   return dataset, chunks
 
 

@@ -43,6 +43,31 @@ class DatasetToZarrTest(test_util.TestCase):
     self.assertEqual(roundtripped_ds.chunks, {})
     self.assertEqual(chunks, {'x': 2})
 
+  def test_open_zarr_with_shards(self):
+    dataset = xarray.Dataset(
+        {'foo': ('x', np.arange(0, 60, 10))},
+        coords={'x': np.arange(6)},
+    )
+    template = xbeam.make_template(dataset)
+    inputs = [
+        (xbeam.Key({'x': 0}), dataset.isel(x=slice(0, 3))),
+        (xbeam.Key({'x': 3}), dataset.isel(x=slice(3, 6))),
+    ]
+    temp_dir = self.create_tempdir().full_path
+    inputs | xbeam.ChunksToZarr(
+        temp_dir,
+        template=template,
+        zarr_chunks={'x': 1},
+        zarr_shards={'x': 3},
+        zarr_format=3,
+    )
+    roundtripped_ds, chunks = xbeam.open_zarr(temp_dir)
+    xarray.testing.assert_identical(roundtripped_ds, dataset)
+    self.assertEqual(chunks, {'x': 1})
+
+    _, shard_chunks = xbeam.open_zarr(temp_dir, read_shards=True)
+    self.assertEqual(shard_chunks, {'x': 3})
+
   def test_open_zarr_inconsistent(self):
     source_ds = xarray.Dataset(
         {
@@ -57,6 +82,28 @@ class DatasetToZarrTest(test_util.TestCase):
         "inconsistent chunk sizes on Zarr dataset for dimension 'x': {2, 3}",
     ):
       xbeam.open_zarr(temp_dir)
+
+  def test_open_zarr_inconsistent_shards(self):
+    source_ds = xarray.Dataset(
+        {'foo': ('x', np.arange(6)), 'bar': ('x', np.arange(6))}
+    )
+    temp_dir = self.create_tempdir().full_path
+    source_ds.to_zarr(
+        temp_dir,
+        zarr_format=3,
+        encoding={
+            'foo': {'chunks': (1,), 'shards': (3,)},
+            'bar': {'chunks': (1,)},
+        },
+    )
+    _, chunks = xbeam.open_zarr(temp_dir)
+    self.assertEqual(chunks, {'x': 1})
+    with self.assertRaisesRegex(
+        ValueError,
+        r"inconsistent chunk sizes on Zarr dataset for dimension 'x': {1, 3} "
+        r'\(shard sizes used where present\)',
+    ):
+      xbeam.open_zarr(temp_dir, read_shards=True)
 
   def test_make_template(self):
     source = xarray.Dataset(
